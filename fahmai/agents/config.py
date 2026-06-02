@@ -37,6 +37,13 @@ DOC_RECURSION = 8       # doc specialist step budget (anti-loop)
 TEAM_RECURSION = 60     # whole-graph recursion limit
 MAX_VERIFY_ATTEMPTS = 2 # synth<->verify retries
 
+# guardrails: "on" = deterministic scrub + ≤1 LLM repair for residual semantic violations;
+# "off" = scrub-only (strictly 0 extra LLM calls).
+GUARDRAIL_REPAIR = os.getenv("FAHMAI_GUARDRAIL_REPAIR", "on").lower() not in ("0", "off", "false")
+
+# retry a specialist this many extra times on a transient gateway timeout (504/aborted)
+RETRY_ON_TIMEOUT = int(os.getenv("FAHMAI_RETRY_ON_TIMEOUT", "2"))
+
 # --- data paths ---
 DATA = ROOT / "data"
 QUESTIONS_CSV = DATA / "questions.csv"

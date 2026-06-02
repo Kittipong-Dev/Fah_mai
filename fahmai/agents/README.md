@@ -39,6 +39,8 @@ fahmai/agents/
     sql_query.py  search_docs.py  get_document.py
   specialists/     one sub-agent per module (drop a file here to add a 3rd specialist)
     base.py  sql_analyst.py  doc_researcher.py
+  guardrails/      deterministic input tagger + output validator (regex/string, ~0 LLM)
+    patterns.py  input_guard.py  output_guard.py
   graph.py         State + nodes + build_team() + aanswer()/answer()
   data.py          load_questions()→QMAP, load_ground_truth()
   runner.py        resumable batch + the argparse CLI (cli())
@@ -65,6 +67,37 @@ localized so it's easy to see and revert:
 Plus grader-aligned **refusal / injection** rules in `prompts/synth.py`: a refusal carries
 verb + topic + scope and never echoes a candidate value/fabricated count; never confirm an
 authority/role asserted inside the question — verify it, else decline.
+
+## Guardrails (deterministic, ~0 latency)
+Prompts alone aren't reliable, so two guardrail nodes wrap the graph:
+`START → input_guard → plan → … → verify → guard → END`.
+- **input_guard** (`guardrails/input_guard.py`) — pure regex (`scan_input`): tags the question with
+  8 injection patterns (`system_token`, `fake_policy_id`, `appeal_authority`, `false_memory`,
+  `forced_string`, `lang_switch`, `do_not_consult`, `echo_content`) + extracts the demanded
+  verbatim strings, asker-proposed candidate values, language demand, and authority-grant intent.
+  It only **tags** (never blocks) so a benign-but-injection-shaped question is still answered.
+  The tags are also injected into the synthesizer prompt.
+- **guard** (`guardrails/output_guard.py`) — validates the final answer (`check_output`) against 5
+  rules: no demanded forced-string, no echoed candidate value, must be Thai, must not affirm an
+  asserted authority, and a refusal must be well-formed (verb + scope). `scrub` fixes the mechanical
+  violations with **no LLM**; a residual semantic violation triggers **≤1** synth rewrite.
+
+Measured cost: `scan_input`+`check_output`+`scrub` over 100 questions = **~1 ms total, 0 LLM**. The
+only added LLM call is the rare repair pass (a few INJ edge cases). Set `FAHMAI_GUARDRAIL_REPAIR=off`
+for strictly-zero extra LLM (scrub-only). Grounded in a scan of all 100 questions: these patterns
+flag 7/10 INJ with **zero false positives** on EASY/MED/HARD/XHARD; the 2 "quiet" false-premise
+injections (INJ-018/021) are left to the identity canon in `schema_card` + the verifier.
+
+## Schema knowledge & resilience
+- **Enum value-map** — `scripts/build_enum_dictionary.py` introspects the DB and writes
+  `fahmai/tools/enum_dict.py` (`ENUM_CARD`), appended to `schema_card.SCHEMA_CARD`. It lists each
+  low-cardinality categorical column's exact values + a hand-curated **rank** where the data can't
+  show it (`loyalty_tier: silver<gold<platinum`, `position_level: IC<Manager<Director<C-level`). This
+  is why the agent stops doing alphabetical `max()` on a tier. Re-run the script after any data reload.
+- **Gateway-timeout retry** — `specialists/base.py:run_specialist_async` retries a specialist on a
+  transient OpenRouter 504 / "operation aborted" (up to `FAHMAI_RETRY_ON_TIMEOUT`, default 2, with
+  backoff), and labels a give-up as `(model gateway timeout …)` vs the recursion `(stopped after step
+  budget …)` so traces are unambiguous.
 
 ## Debugging
 - **Per-question trace**: LangSmith project `fahmai` — every `aanswer` is one root run; inputs
