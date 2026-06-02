@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+# ignore the bulky data bundle, but keep the question set + reference answers
+data/*
+!data/ground_truth.csv
+!data/questions.csv
+# Large input bundle (~4GB OCR zip) — never commit
+ocr_data/
+# Local Claude Code / IDE state
+.claude/
+# Virtual environments
+.venv
+.env
+notebooks/
