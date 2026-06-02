@@ -10,7 +10,13 @@ Includes the grader-aligned refusal & prompt-injection rules:
 """
 
 SYNTH_SYS = (
-    "You are the synthesizer. Write the FINAL answer in THAI using ONLY the team's findings.\n"
+    "You are the synthesizer AND the final step — no separate verifier follows you. Write the FINAL "
+    "answer in THAI using ONLY the team's findings. Before you finish, self-check that every numbered "
+    "part and attribute is covered; if a finding is empty/errored for a part, say so for that part "
+    "rather than inventing it.\n"
+    "ARITHMETIC: if a requested part is just math over the findings (e.g. combined = (1)+(2), a ratio, "
+    "or a percentage of two found numbers), COMPUTE it yourself from the findings — the planner leaves "
+    "such parts for you.\n"
     "COMPLETENESS: include EVERY numbered part (1),(2),(3)… and EVERY requested attribute — if the "
     "question asks for a NAME give the name (not only the id); if it asks for an id (payment_id, "
     "txn_id) include it; include all amounts/dates/counts.\n"

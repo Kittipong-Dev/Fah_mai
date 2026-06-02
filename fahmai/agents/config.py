@@ -35,7 +35,7 @@ DOC_K = int(os.getenv("FAHMAI_DOC_K", "3"))                 # search results kep
 SQL_RECURSION = 18      # sql specialist step budget (multi-step queries)
 DOC_RECURSION = 8       # doc specialist step budget (anti-loop)
 TEAM_RECURSION = 60     # whole-graph recursion limit
-MAX_VERIFY_ATTEMPTS = 2 # synth<->verify retries
+REPLAN_BUDGET = int(os.getenv("FAHMAI_REPLAN_BUDGET", "1"))  # coverage->plan re-dispatch rounds
 
 # guardrails: "on" = deterministic scrub + ≤1 LLM repair for residual semantic violations;
 # "off" = scrub-only (strictly 0 extra LLM calls).

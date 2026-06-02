@@ -18,6 +18,7 @@ Run:  uv run python scripts/build_mschema.py   ->  data/mschema.md
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -27,7 +28,9 @@ from sqlalchemy import text
 
 from fahmai.db import ROOT, get_engine
 
-OUT = ROOT / "data" / "mschema.md"
+# A/B toggle: FAHMAI_SCHEMA_RAW=1 emits raw fact_* (no curated views) to test "do views help?"
+RAW_MODE = os.getenv("FAHMAI_SCHEMA_RAW", "0").lower() in ("1", "true", "on")
+OUT = ROOT / "data" / ("mschema_raw.md" if RAW_MODE else "mschema.md")
 EX_K = 3            # example values per column
 EX_MAXLEN = 40
 EX_SKIP = re.compile(r"content|title|summary|participant|description|^path$|tracking_number", re.I)
@@ -41,7 +44,11 @@ DIMS = ["dim_product", "dim_customer", "dim_employee", "dim_branch", "dim_vendor
         "dim_promo_campaign", "dim_promo_mechanic", "dim_product_recall_history", "dim_bank_account",
         "dim_department", "dim_position_level", "dim_care_plus_sku_tier"]
 EXTRA = ["pos_logs", "ocr_warranty_form"]
-TABLES = VIEWS + DIMS + EXTRA
+FACTS = ["fact_sales", "fact_sales_line_item", "fact_return", "fact_refund_paid", "fact_warranty_claim",
+         "fact_promo_redemption", "fact_inventory_movement", "fact_inventory_monthly_snapshot",
+         "fact_loyalty_ledger", "fact_payroll", "fact_cs_interaction", "fact_shipping",
+         "fact_bank_transaction", "fact_vendor_payment"]
+TABLES = (FACTS if RAW_MODE else VIEWS) + DIMS + EXTRA
 
 NOTES = {
     "v_sales": "1 row/txn, deduped; enriched (branch/customer/fiscal_year_ce)",
@@ -66,6 +73,14 @@ PRIMARY_KEY = {
     "v_promo": "redemption_id", "v_vendor_payments": "payment_id", "v_bank_txn": "bank_txn_id",
     "v_payroll": "payroll_id", "v_cs": "cs_interaction_id", "v_shipping": "shipping_id",
     "ocr_warranty_form": "artifact_id",
+    # raw fact_* PKs (same id names as their views)
+    "fact_sales": "txn_id", "fact_sales_line_item": "line_item_id", "fact_return": "return_id",
+    "fact_refund_paid": "refund_id", "fact_warranty_claim": "claim_id",
+    "fact_promo_redemption": "redemption_id", "fact_inventory_movement": "movement_id",
+    "fact_inventory_monthly_snapshot": "snapshot_id", "fact_loyalty_ledger": "ledger_id",
+    "fact_payroll": "payroll_id", "fact_cs_interaction": "cs_interaction_id",
+    "fact_shipping": "shipping_id", "fact_bank_transaction": "bank_txn_id",
+    "fact_vendor_payment": "payment_id",
 }
 
 # curated foreign keys (col on table -> target table.col)
@@ -89,6 +104,28 @@ FOREIGN_KEYS = [
     ("dim_promo_mechanic", "campaign_id", "dim_promo_campaign.campaign_id"),
     ("dim_product_recall_history", "sku_id", "dim_product.sku_id"),
     ("ocr_warranty_form", "claim_id_db", "v_warranty.claim_id (= fact_warranty_claim.claim_id)"),
+    # raw fact_* FKs (for RAW_MODE)
+    ("fact_sales", "customer_id", "dim_customer.customer_id"),
+    ("fact_sales", "branch_code", "dim_branch.branch_code"),
+    ("fact_sales", "employee_id", "dim_employee.employee_id"),
+    ("fact_sales", "promo_campaign_id", "dim_promo_campaign.campaign_id"),
+    ("fact_sales_line_item", "txn_id", "fact_sales.txn_id"),
+    ("fact_sales_line_item", "sku_id", "dim_product.sku_id"),
+    ("fact_return", "sku_id", "dim_product.sku_id"),
+    ("fact_return", "customer_id", "dim_customer.customer_id"),
+    ("fact_return", "original_txn_id", "fact_sales.txn_id"),
+    ("fact_refund_paid", "return_id", "fact_return.return_id"),
+    ("fact_refund_paid", "approver_employee_id", "dim_employee.employee_id"),
+    ("fact_warranty_claim", "sku_id", "dim_product.sku_id"),
+    ("fact_warranty_claim", "customer_id", "dim_customer.customer_id"),
+    ("fact_promo_redemption", "txn_id", "fact_sales.txn_id"),
+    ("fact_promo_redemption", "campaign_id", "dim_promo_campaign.campaign_id"),
+    ("fact_inventory_movement", "sku_id", "dim_product.sku_id"),
+    ("fact_inventory_movement", "branch_code", "dim_branch.branch_code"),
+    ("fact_vendor_payment", "vendor_id", "dim_vendor.vendor_id"),
+    ("fact_vendor_payment", "vendor_contract_version_id", "dim_vendor_contract_version.contract_version_id"),
+    ("fact_cs_interaction", "customer_id", "dim_customer.customer_id"),
+    ("fact_cs_interaction", "employee_id", "dim_employee.employee_id"),
 ]
 
 
@@ -164,16 +201,22 @@ def main() -> int:
             blocks.append("\n".join(lines))
             n_tab += 1
 
-    fk_lines = [f"{t}.{c} = {tgt}" for t, c, tgt in FOREIGN_KEYS]
-    raw_note = ("\n## Raw fact_* tables (no M-Schema block — each mirrors its v_* minus enrichment/dedup;\n"
-                "use only for data-quality / phantom / when a question names FACT_* explicitly):\n"
-                "fact_sales, fact_sales_line_item, fact_return, fact_refund_paid, fact_warranty_claim,\n"
-                "fact_promo_redemption, fact_inventory_movement, fact_inventory_monthly_snapshot,\n"
-                "fact_loyalty_ledger, fact_payroll, fact_cs_interaction, fact_shipping, fact_bank_transaction,\n"
-                "fact_vendor_payment, doc_corpus(doc_id, channel, doc_date, topic, content, ...)")
+    tset = set(TABLES)
+    fk_lines = [f"{t}.{c} = {tgt}" for t, c, tgt in FOREIGN_KEYS if t in tset]
+    if RAW_MODE:
+        header = "【DB_ID】 fahmai   (Supabase Postgres — RAW fact_* tables; apply BE→CE + dedup yourself)"
+        raw_note = ("\n## Note: curated v_* views also exist (fact_* + enrichment/dedup/fiscal_year_ce);\n"
+                    "doc_corpus(doc_id, channel, doc_date, topic, content, ...)")
+    else:
+        header = "【DB_ID】 fahmai   (Supabase Postgres — prefer the v_* views)"
+        raw_note = ("\n## Raw fact_* tables (no M-Schema block — each mirrors its v_* minus enrichment/dedup;\n"
+                    "use only for data-quality / phantom / when a question names FACT_* explicitly):\n"
+                    "fact_sales, fact_sales_line_item, fact_return, fact_refund_paid, fact_warranty_claim,\n"
+                    "fact_promo_redemption, fact_inventory_movement, fact_inventory_monthly_snapshot,\n"
+                    "fact_loyalty_ledger, fact_payroll, fact_cs_interaction, fact_shipping, fact_bank_transaction,\n"
+                    "fact_vendor_payment, doc_corpus(doc_id, channel, doc_date, topic, content, ...)")
 
-    doc = ("【DB_ID】 fahmai   (Supabase Postgres — prefer the v_* views)\n\n"
-           + "\n\n".join(blocks)
+    doc = (header + "\n\n" + "\n\n".join(blocks)
            + "\n\n【Foreign keys】\n" + "\n".join(fk_lines)
            + "\n" + raw_note + "\n")
     OUT.write_text(doc, encoding="utf-8")                       # human-readable review copy

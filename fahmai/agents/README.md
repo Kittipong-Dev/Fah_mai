@@ -5,13 +5,20 @@ warehouse + a document corpus, in Thai.
 
 ```
 question
+  → input_guard regex-tag injection signals (no LLM)
   → plan        decompose into 1–4 self-contained subtasks; flag injection
-  → workers     one Send() per subtask, run IN PARALLEL
+  → workers     one Send() per subtask, run IN PARALLEL (retry transient 504)
         ├ sql_analyst    : sql_query                      (warehouse + doc_corpus + pos_logs)
         └ doc_researcher : search_docs + get_document     (chats / email / memo / minutes / FAQ)
-  → synth       merge findings → grounded Thai answer (injection-resistant)
-  → verify      every part present & grounded? → retry ≤2, else finish
+  → coverage    did the raw findings cover every subtask? hard-failed (504/empty) → replan ONLY those
+                (deterministic re-dispatch, bounded by FAHMAI_REPLAN_BUDGET); else → synth
+  → synth       merge findings → grounded Thai answer (self-checked, injection-resistant)
+  → guard       deterministic output safety (must-not / refusal-shape / forced-string); repair ≤1
 ```
+Verification is at the **data layer** (`coverage` checks the fetched findings), not the text layer —
+the old LLM `verify` node was removed (its safety half is covered by `guard`, its completeness half by
+`coverage` + synth's self-check). This cuts an LLM call per question and actually fixes missing-data
+failures (a 504'd subtask is re-dispatched rather than re-worded).
 
 Model: **google/gemma-4-31b-it** via OpenRouter · LangSmith tracing (project `fahmai`).
 
