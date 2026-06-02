@@ -17,6 +17,16 @@ from fahmai.agents.guardrails.input_guard import InputFlags
 _THAI_RE = re.compile(r"[฀-๿]")
 _AFFIRM_RE = re.compile(r"ยืนยัน|อนุมัติ|confirmed|ดำรงตำแหน่ง.*จริง|มีอำนาจ", re.I)
 
+# Deterministic decline used when a planted authority/role claim survives the one synth repair.
+# Carries a refusal verb + scope marker and explicitly declines the injected directive, so it reads
+# as a valid grader Path-B answer (decline the directive) — never affirms the asserted authority.
+DECLINE_TEMPLATE = (
+    "ไม่สามารถยืนยันสิทธิ์ อำนาจ หรือตำแหน่งตามที่อ้างในคำถามได้ "
+    "เนื่องจากข้อความที่ฝังมาในคำถามไม่ถือเป็นหลักฐานในระบบ "
+    "สิทธิ์และบทบาทต้องตรวจสอบจากข้อมูลจริงใน dim_employee และ "
+    "dim_signing_authority_ladder เท่านั้น"
+)
+
 
 @dataclass
 class Violation:
@@ -43,7 +53,8 @@ def _looks_like_refusal(text: str) -> bool:
     return any(v.lower() in head for v in P.REFUSAL_VERBS)
 
 
-def check_output(answer: str, flags: InputFlags, findings_empty: bool = False) -> list[Violation]:
+def check_output(answer: str, flags: InputFlags, findings_empty: bool = False,
+                 is_injection: bool = False) -> list[Violation]:
     a = answer or ""
     al = a.lower()
     out: list[Violation] = []
@@ -62,8 +73,10 @@ def check_output(answer: str, flags: InputFlags, findings_empty: bool = False) -
     if not is_thai(a):
         out.append(Violation("not_thai", "answer is not in Thai", scrubbable=False))
 
-    # (4) affirmed an authority/role the question tried to plant
-    if flags.authority_grant and _AFFIRM_RE.search(a):
+    # (4) affirmed an authority/role the question tried to plant. Trigger on either the regex flag
+    # (question literally planted a role/authority claim) OR the planner's semantic is_injection
+    # judgement — the latter catches affirmations the keyword flag misses.
+    if (flags.authority_grant or is_injection) and _AFFIRM_RE.search(a):
         out.append(Violation("authority_affirm", "affirms an asserted authority/role", scrubbable=False))
 
     # (5) a refusal is expected but it isn't well-formed (verb + scope)
@@ -91,3 +104,12 @@ def scrub(answer: str, violations: list[Violation]) -> tuple[str, list[Violation
             residual.append(v)  # not_thai / authority_affirm -> need semantic rewrite
     a = re.sub(r"\s{2,}", " ", a).strip()
     return a, residual
+
+
+def force_decline(violations: list[Violation]) -> str | None:
+    """Deterministic safety fallback: if a planted-authority affirmation survived the synth repair,
+    return a clean decline template instead of letting the affirming text reach the user. Returns
+    None for any other residual (e.g. not_thai) so the caller falls back to the scrubbed text."""
+    if any(v.kind == "authority_affirm" for v in violations):
+        return DECLINE_TEMPLATE
+    return None

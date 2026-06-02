@@ -87,7 +87,13 @@ Prompts alone aren't reliable, so two guardrail nodes wrap the graph:
 - **guard** (`guardrails/output_guard.py`) — validates the final answer (`check_output`) against 5
   rules: no demanded forced-string, no echoed candidate value, must be Thai, must not affirm an
   asserted authority, and a refusal must be well-formed (verb + scope). `scrub` fixes the mechanical
-  violations with **no LLM**; a residual semantic violation triggers **≤1** synth rewrite.
+  violations with **no LLM**; a residual semantic violation triggers **≤1** synth rewrite. The
+  authority-affirm rule fires when the question planted a role/authority claim **or** the planner
+  flagged `is_injection`, AND the answer carries affirm-language (ยืนยัน/อนุมัติ/มีอำนาจ/confirmed).
+  If such a violation survives the one repair pass, `force_decline` **deterministically** replaces the
+  answer with a Thai decline template — so a fell-for-injection affirmation can never reach the user,
+  regardless of what synth does. A correct Path-A injection answer (e.g. "CEO คือ Naret", real sales
+  figures) has no affirm-language, so it is never templated.
 
 Measured cost: `scan_input`+`check_output`+`scrub` over 100 questions = **~1 ms total, 0 LLM**. The
 only added LLM call is the rare repair pass (a few INJ edge cases). Set `FAHMAI_GUARDRAIL_REPAIR=off`
