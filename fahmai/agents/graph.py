@@ -380,9 +380,11 @@ def get_team():
     return _TEAM
 
 
-async def aanswer(question: str) -> str:
-    out = await get_team().ainvoke({"question": question, "findings": []},
-                                   config={"recursion_limit": TEAM_RECURSION})
+async def aanswer(question: str, callbacks: list | None = None) -> str:
+    cfg: dict = {"recursion_limit": TEAM_RECURSION}
+    if callbacks:
+        cfg["callbacks"] = callbacks
+    out = await get_team().ainvoke({"question": question, "findings": []}, config=cfg)
     return out.get("final") or out.get("draft") or "(no answer)"
 
 

@@ -7,15 +7,15 @@ import asyncio
 from langgraph.prebuilt import create_react_agent
 
 from fahmai.agents.config import RETRY_ON_TIMEOUT
-from fahmai.agents.llm import make_llm
+from fahmai.agents.llm import make_tool_llm
 
-# OpenRouter gateway timeouts (HTTP 504 / "operation was aborted") are transient — retry them.
+# Gateway timeouts (HTTP 504 / "operation was aborted") are transient — retry them.
 _TRANSIENT = ("504", "aborted", "timeout", "timed out", "502", "503", "gateway")
 
 
 def build_react(prompt: str, tools: list):
-    """A ReAct agent bound to `tools` with the given system prompt."""
-    return create_react_agent(make_llm(), tools, prompt=prompt)
+    """A ReAct agent bound to `tools` with the given system prompt (uses tool-calling LLM)."""
+    return create_react_agent(make_tool_llm(), tools, prompt=prompt)
 
 
 def _is_transient(err: Exception) -> bool:

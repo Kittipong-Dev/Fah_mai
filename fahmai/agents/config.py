@@ -24,9 +24,24 @@ if os.getenv("LANGSMITH_API_KEY"):
     _proj = (os.getenv("LANGSMITH_PROJECT") or "fahmai").strip().strip('"')
     os.environ["LANGSMITH_PROJECT"] = os.environ["LANGCHAIN_PROJECT"] = _proj
 
-# --- model (OpenRouter) ---
+# --- model ---
 MODEL = os.getenv("FAHMAI_MODEL", "google/gemma-4-31b-it")
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Orchestration nodes (classify / plan / synth / guard / compute) — plain text generation.
+# If FAHMAI_LLM_BASE_URL is set, use that vLLM endpoint directly.
+LLM_BASE_URL = os.getenv("FAHMAI_LLM_BASE_URL", "https://openrouter.ai/api/v1")
+LLM_API_KEY_ENV = "FAHMAI_LLM_API_KEY" if os.getenv("FAHMAI_LLM_BASE_URL") else "OPEN_ROUTER"
+
+# Specialist agents (sql_analyst / doc_researcher / rag_researcher / sql_verifier) need
+# native tool-calling. Use FAHMAI_TOOL_BASE_URL if provided; otherwise same as LLM_BASE_URL.
+# If the primary vLLM server lacks --enable-auto-tool-choice, point this at OpenRouter.
+TOOL_BASE_URL = os.getenv("FAHMAI_TOOL_BASE_URL", LLM_BASE_URL)
+# For tool key: use FAHMAI_TOOL_API_KEY if set and non-empty, else fall back to OPEN_ROUTER
+_tool_key = os.getenv("FAHMAI_TOOL_API_KEY", "")
+TOOL_API_KEY_ENV = "FAHMAI_TOOL_API_KEY" if _tool_key else "OPEN_ROUTER"
+TOOL_MODEL = os.getenv("FAHMAI_TOOL_MODEL", MODEL)
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"  # kept for embed.py
 
 # --- runtime knobs (override via env) ---
 CONCURRENCY = int(os.getenv("FAHMAI_CONCURRENCY", "3"))      # questions in flight
