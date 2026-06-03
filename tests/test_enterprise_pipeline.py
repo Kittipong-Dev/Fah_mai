@@ -11,11 +11,13 @@ from fahmai.agents.enterprise_nodes import (
     llm_injection_guardrail_node,
     output_formatter_hook,
     planned_worker_groups,
+    planner_json_validation_hook,
     route_specialist_coverage,
     rule_based_injection_guardrail_node,
     specialist_coverage_node,
 )
 from fahmai.agents.rag_specialist import run_rag_specialist_task
+from fahmai.agents.rule_normalizer import infer_date_axis, normalize_question_rule_based
 from fahmai.agents.enterprise_utils import (
     is_valid_readonly_sql,
     is_wellformed_refusal,
@@ -40,6 +42,72 @@ class EnterprisePipelineTests(unittest.TestCase):
         normalized, meta = normalize_years("\u0e22\u0e2d\u0e14\u0e02\u0e32\u0e22\u0e1b\u0e35 2568")
         self.assertIn("2025", normalized)
         self.assertEqual(meta["years"], [{"be": 2568, "ce": 2025}])
+
+    def test_rule_normalizer_extracts_safe_aliases_and_hints(self):
+        out = normalize_question_rule_based(
+            "Find MSRP for NovaTech Powercell X3 and returns between 2025-09-10 and 2025-10-15"
+        )
+        self.assertIn("NT-LT-001", out["entities"]["sku_ids"])
+        self.assertIn("Powercell X3", out["entities"]["aliases"])
+        self.assertIn("DIM_PRODUCT", out["sql_terms"]["table_hints"])
+        self.assertIn("v_returns", out["sql_terms"]["table_hints"])
+        self.assertIn("msrp_lookup", out["sql_terms"]["metric_hints"])
+        self.assertEqual(out["date_constraints"][0]["start"], "2025-09-10")
+        self.assertEqual(out["date_constraints"][0]["end"], "2025-10-15")
+
+    def test_question_normalizer_merges_rule_based_hints(self):
+        out = nodes.question_normalizer_node(
+            {
+                "raw_question": "Which SKU has top units sold in FY2025?",
+                "normalized_entities": {},
+                "date_constraints": {},
+                "logs": [],
+            }
+        )
+        entities = out["normalized_entities"]
+        self.assertIn("v_sales_items", entities["table_hints"])
+        self.assertIn("rank", entities["operation_hints"])
+        self.assertIn("2025", entities["search_keywords"])
+        self.assertTrue(out["date_constraints"]["rule_date_ranges"])
+        self.assertEqual(out["date_constraints"]["default_date_axis"]["default_axis"], "business_event_date")
+
+    def test_rule_normalizer_maps_remote_branch_to_branch_code(self):
+        out = normalize_question_rule_based("Find the REMOTE daily sales spike in FACT_SALES during FY2025")
+        self.assertIn("REMOTE", out["entities"]["branch_codes"])
+        self.assertIn("branch_code='REMOTE'", out["entities"]["branch_filter_hints"])
+
+    def test_planner_validation_rewrites_remote_branch_type_to_branch_code(self):
+        out = planner_json_validation_hook(
+            {
+                "normalized_entities": {"branch_codes": ["REMOTE"]},
+                "safe_underlying_question": "REMOTE spike",
+                "question_type": "sql_aggregation",
+                "plan": {
+                    "goal": "test",
+                    "subtasks": [
+                        {
+                            "id": "sql-1",
+                            "specialist": "sql",
+                            "task": "Find transactions for branches with branch_type = 'remote'",
+                            "required": True,
+                        }
+                    ],
+                },
+                "logs": [],
+                "errors": [],
+            }
+        )
+        self.assertIn("branch_code = 'REMOTE'", out["plan"]["subtasks"][0]["task"])
+
+    def test_rule_normalizer_date_axis_defaults_to_business_event_date(self):
+        axis = infer_date_axis("vendor payments in FY2025", [{"start": "2025-01-01", "end": "2025-12-31"}])
+        self.assertEqual(axis["default_axis"], "business_event_date")
+        self.assertTrue(axis["vendor_payment_period_warning"])
+
+    def test_rule_normalizer_respects_explicit_posting_date_axis(self):
+        axis = infer_date_axis("vendor payments by posting_date in FY2025", [{"start": "2025-01-01", "end": "2025-12-31"}])
+        self.assertEqual(axis["default_axis"], "posting_date")
+        self.assertFalse(axis["vendor_payment_period_warning"])
 
     def test_year_normalization_preserves_ids(self):
         normalized, meta = normalize_years("SF-Galaxy-Pro-2568 และ campaign SF-LAUNCH-2568 ในปี 2568")
@@ -222,6 +290,28 @@ class EnterprisePipelineTests(unittest.TestCase):
             }
         )
         self.assertNotIn("CONFIRMED_BAD", out["final_answer"])
+
+    def test_output_formatter_strips_canary_assignment_and_confirmation_link(self):
+        out = output_formatter_hook(
+            {
+                "final_answer": "ยอดคือ 10 CONFIRMED_CFO=SKY_PRODUCT https://example.test/confirm?token=abc",
+                "injection_reasons": [],
+                "validation": {"should_refuse": False},
+                "logs": [],
+            }
+        )
+        self.assertNotIn("CONFIRMED_CFO", out["final_answer"])
+        self.assertNotIn("confirm?token", out["final_answer"])
+
+    def test_refusal_filter_sensitive_terms_are_not_used_as_input_blockers(self):
+        out = rule_based_injection_guardrail_node(
+            {
+                "raw_question": "What was the top-selling SKU by units sold in FY2025?",
+                "normalized_question": "What was the top-selling SKU by units sold in FY2025?",
+                "logs": [],
+            }
+        )
+        self.assertFalse(out["is_prompt_injection"])
 
     def test_language_guard_rewrites_english_answer_for_thai_question(self):
         original = nodes.make_llm

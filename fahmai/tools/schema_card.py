@@ -14,9 +14,16 @@ _RULES = r"""# FahMai data warehouse — Postgres. Prefer the curated VIEWS (v_*
 ## CRITICAL RULES (read first)
 - `dim_date.fiscal_year` is **BUDDHIST ERA** (2567=CE2024, 2568=CE2025). Use `dim_date.fiscal_year_ce`
   for CE year, or filter `business_event_date` by calendar year. "ปี 2568 / FY2025" = calendar 2025.
-- Time: use `business_event_date` for when something happened. Rows also carry posting_date,
-  effective_date, as_of_date (=2026-01-15 release snapshot).
+- Date-axis convention for FACT_* period filters: when a question says "in year X", "in month X",
+  or "in Q3" without naming a date column, filter on `business_event_date`. Use `posting_date`
+  only for GL/accounting/month-end-close wording or when explicitly named; use `effective_date`
+  only when the question says effective; use `as_of_date` only when the question says as of.
+  `FACT_VENDOR_PAYMENT` has frequent cross-month NET-30 posting lag, so vendor-payment period
+  aggregations MUST default to `business_event_date` unless `posting_date` is explicitly requested.
 - Money columns end in `_thb` (numeric; can be negative for bank). Booleans: is_b2b, is_care_plus, ...
+- Branch convention: `REMOTE` is a branch_code. For "branch REMOTE" / online branch questions, filter
+  `branch_code='REMOTE'`. The `branch_type` enum values are lowercase: `remote`, `branch`, `hq`;
+  never filter `branch_type='REMOTE'`.
 - `fact_sales` has NO duplicate txn_id (clean) — v_sales is 1 row/txn. **Phantom/duplicate rows live in
   `fact_promo_redemption`** (same txn_id logged under different `channel`); when counting "real"
   redemptions, dedup by txn_id (e.g. count(distinct txn_id)).

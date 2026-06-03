@@ -33,6 +33,7 @@ from fahmai.agents.prompts.enterprise import (
     PLANNER_ENTERPRISE_SYS,
 )
 from fahmai.agents.query_log import append_query_log
+from fahmai.agents.rule_normalizer import normalize_question_rule_based
 from fahmai.agents.specialists import (
     enterprise_compute,
     enterprise_rag,
@@ -48,7 +49,151 @@ _EXTRA_INJECTION = {
     "hidden_instruction": re.compile(r"hidden instruction", re.I),
     "unsupported_confirm": re.compile(r"confirm unsupported|confirm .*facts?", re.I),
     "no_internal_table": re.compile(r"do not use internal table", re.I),
+    "canary_assignment": re.compile(r"\bCONFIRMED_[A-Z0-9_]+\s*=\s*\S+", re.I),
+    "system_tag": re.compile(r"\[\s*/?\s*system\b[^\]]*\]|</?\s*system\s*>|<\|\s*[^|]*\|>|<\s*im_start\s*>|<\|start_header_id\|>", re.I),
+    "faux_reasoning": re.compile(r"</?\s*(think|scratchpad|reasoning)\s*>", re.I),
+    "trust_claim": re.compile(r"trust\s*[=:]\s*high|admin\s*mode|system\s*override|certified\s+admin|verified\s+admin", re.I),
+    "fake_session_continuity": re.compile(r"(previous|earlier|last)\s+session|you (already )?confirmed|as (we )?agreed", re.I),
+    "leading_confirm": re.compile(r"(correct|right|true)\s*\?$|i\s+(vaguely\s+)?remember", re.I),
+    "exfil_request": re.compile(r"(copy|paste|forward|send)[^\n]{0,40}(link|url|confirmation)|forward[^\n]{0,30}(@|email)", re.I),
 }
+
+_OUTPUT_CANARY_RE = re.compile(r"\bCONFIRMED_[A-Z0-9_]+\s*=\s*\S+|\bCONFIRMED_[A-Z0-9_]+\b", re.I)
+_OUTPUT_CONFIRM_LINK_RE = re.compile(r"https?://\S*(confirm|token|reset|verify|otp)\S*", re.I)
+
+
+def _merge_lists(*values: Any) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        items = value if isinstance(value, list) else [value] if value else []
+        for item in items:
+            clean = str(item).strip()
+            if clean and clean not in seen:
+                out.append(clean)
+                seen.add(clean)
+    return out
+
+
+def _merge_rule_normalization(
+    entities: dict[str, Any],
+    terms: dict[str, list[str]],
+    dates: dict[str, Any],
+    rule: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    merged = dict(entities)
+    rule_entities = rule.get("entities") or {}
+    for key, values in rule_entities.items():
+        if isinstance(values, list):
+            merged[key] = _merge_lists(merged.get(key), values)
+
+    sql_terms = rule.get("sql_terms") or {}
+    rag_terms = rule.get("rag_terms") or {}
+    log_terms = rule.get("log_terms") or {}
+    routing_hints = rule.get("routing_hints") or {}
+    rule_date_terms: list[str] = []
+    for item in rule.get("date_constraints") or []:
+        if isinstance(item, dict):
+            rule_date_terms.extend(
+                str(value)
+                for key in ("start", "end", "raw")
+                for value in [item.get(key)]
+                if value
+            )
+            for key in ("start", "end"):
+                value = str(item.get(key) or "")
+                if re.match(r"^20\d{2}-", value):
+                    rule_date_terms.append(value[:4])
+
+    merged["search_keywords"] = _merge_lists(
+        terms.get("search_keywords"),
+        rule_date_terms,
+        rule_entities.get("sku_ids"),
+        rule_entities.get("vendor_ids"),
+        rule_entities.get("employee_ids"),
+        rule_entities.get("customer_ids"),
+        rule_entities.get("branch_codes"),
+        rule_entities.get("branch_filter_hints"),
+        rule_entities.get("campaign_ids"),
+        rule_entities.get("invoice_ids"),
+        rule_entities.get("return_ids"),
+        rule_entities.get("refund_ids"),
+        rule_entities.get("claim_ids"),
+        rule_entities.get("aliases"),
+        sql_terms.get("table_hints"),
+        sql_terms.get("metric_hints"),
+        rag_terms.get("rag_keywords"),
+        rag_terms.get("event_markers"),
+    )
+    merged["sql_terms"] = _merge_lists(
+        terms.get("sql_terms"),
+        sql_terms.get("explicit_tables"),
+        sql_terms.get("table_hints"),
+        sql_terms.get("column_hints"),
+        sql_terms.get("metric_hints"),
+        sql_terms.get("operation_hints"),
+        rule_entities.get("branch_filter_hints"),
+    )
+    merged["aliases"] = _merge_lists(terms.get("aliases"), rule_entities.get("aliases"))
+    merged["table_hints"] = _merge_lists(sql_terms.get("table_hints"))
+    merged["explicit_tables"] = _merge_lists(sql_terms.get("explicit_tables"))
+    merged["column_hints"] = _merge_lists(sql_terms.get("column_hints"))
+    merged["metric_hints"] = _merge_lists(sql_terms.get("metric_hints"))
+    merged["operation_hints"] = _merge_lists(sql_terms.get("operation_hints"))
+    merged["doc_families"] = _merge_lists(rag_terms.get("doc_families"))
+    merged["rag_keywords"] = _merge_lists(rag_terms.get("rag_keywords"))
+    merged["event_markers"] = _merge_lists(rag_terms.get("event_markers"))
+    merged["log_families"] = _merge_lists(log_terms.get("log_families"))
+    merged["line_id_hints"] = _merge_lists(log_terms.get("line_id_hints"))
+    merged["question_shape"] = rule.get("question_shape") or {}
+    merged["routing_hints"] = routing_hints
+    merged["date_axis"] = rule.get("date_axis") or {}
+    merged["normalizer_constraints"] = rule.get("constraints") or {}
+    merged["normalizer_warnings"] = rule.get("warnings") or []
+    merged["unresolved_terms"] = rule.get("unresolved_terms") or []
+
+    merged_dates = dict(dates)
+    if rule.get("date_axis"):
+        merged_dates["default_date_axis"] = rule.get("date_axis")
+    if rule.get("date_constraints"):
+        merged_dates["rule_date_ranges"] = rule.get("date_constraints")
+    return merged, merged_dates
+
+
+def _apply_plan_hints(plan: dict[str, Any], state: EnterpriseState) -> dict[str, Any]:
+    entities = state.get("normalized_entities") or {}
+    branch_codes = {str(value).upper() for value in entities.get("branch_codes", [])}
+    if "REMOTE" not in branch_codes:
+        return plan
+
+    def fix_remote_branch(text: Any) -> Any:
+        if not isinstance(text, str):
+            return text
+        fixed = text
+        fixed = re.sub(r"branches?\s+with\s+branch_type\s*=\s*['\"]remote['\"]", "branch_code = 'REMOTE'", fixed, flags=re.I)
+        fixed = re.sub(r"branch_type\s*=\s*['\"]REMOTE['\"]", "branch_code = 'REMOTE'", fixed, flags=re.I)
+        fixed = re.sub(r"branch_type\s*=\s*['\"]remote['\"]", "branch_code = 'REMOTE'", fixed, flags=re.I)
+        fixed = re.sub(r"\bREMOTE\s+branches\b", "branch_code = 'REMOTE'", fixed, flags=re.I)
+        fixed = re.sub(r"\bremote\s+branches\b", "branch_code = 'REMOTE'", fixed, flags=re.I)
+        return fixed
+
+    fixed_plan = dict(plan)
+    fixed_subtasks = []
+    changed = False
+    for st in fixed_plan.get("subtasks") or []:
+        new_st = dict(st)
+        for key in ("task", "expected_output"):
+            value = fix_remote_branch(new_st.get(key))
+            if value != new_st.get(key):
+                changed = True
+                new_st[key] = value
+        fixed_subtasks.append(new_st)
+    if changed:
+        fixed_plan["subtasks"] = fixed_subtasks
+        risk_flags = list(fixed_plan.get("risk_flags") or [])
+        risk_flags.append("normalized REMOTE branch reference to branch_code='REMOTE'")
+        fixed_plan["risk_flags"] = list(dict.fromkeys(risk_flags))
+    return fixed_plan
 
 
 def _llm_json(system: str, human: str) -> dict[str, Any]:
@@ -95,7 +240,6 @@ def question_normalizer_node(state: EnterpriseState) -> dict[str, Any]:
     normalized, month_meta = normalize_month_names(normalized)
     entities = extract_entities(normalized)
     terms = build_terms(normalized, entities)
-    all_entities = {**(state.get("normalized_entities") or {}), **entities, **terms}
     dates = {
         **(state.get("date_constraints") or {}),
         **year_meta,
@@ -103,11 +247,23 @@ def question_normalizer_node(state: EnterpriseState) -> dict[str, Any]:
         **month_meta,
         "dates": entities.get("dates", []),
     }
+    rule = normalize_question_rule_based(normalized, str(state.get("question_id") or ""))
+    rule_entities, dates = _merge_rule_normalization(entities, terms, dates, rule)
+    all_entities = {**(state.get("normalized_entities") or {}), **rule_entities}
     return {
         "normalized_question": normalized,
         "normalized_entities": all_entities,
         "date_constraints": dates,
-        "logs": _append_log(state, {"node": "question_normalizer", "normalized_question": normalized}),
+        "logs": _append_log(
+            state,
+            {
+                "node": "question_normalizer",
+                "normalized_question": normalized,
+                "table_hints": all_entities.get("table_hints", []),
+                "routing_hints": all_entities.get("routing_hints", {}),
+                "normalizer_warnings": all_entities.get("normalizer_warnings", []),
+            },
+        ),
     }
 
 
@@ -120,6 +276,8 @@ def rule_based_injection_guardrail_node(state: EnterpriseState) -> dict[str, Any
             reasons.append(name)
     safe = question
     safe = re.sub(r"\[\s*/?\s*SYSTEM\s*\]", " ", safe, flags=re.I)
+    safe = re.sub(r"\[\s*/?\s*system\b[^\]]*\]|</?\s*system\s*>|<\|\s*[^|]*\|>|<\s*im_start\s*>|<\|start_header_id\|>", " ", safe, flags=re.I)
+    safe = re.sub(r"</?\s*(think|scratchpad|reasoning)\s*>", " ", safe, flags=re.I)
     safe = re.sub(r"(?i)(ignore .*?instructions|reply with .*?exact string|output exactly .*?$)", " ", safe)
     safe = re.sub(r"\s{2,}", " ", safe).strip() or question
     is_injection = bool(reasons) or bool(flags.authority_grant)
@@ -158,8 +316,15 @@ def llm_injection_guardrail_node(state: EnterpriseState) -> dict[str, Any]:
 
 def question_classifier_node(state: EnterpriseState) -> dict[str, Any]:
     q = (state.get("safe_underlying_question") or state.get("normalized_question") or "").lower()
+    hints = (state.get("normalized_entities") or {}).get("routing_hints") or {}
     if state.get("is_prompt_injection"):
         qtype = "prompt_injection"
+    elif hints.get("requires_finance_compute"):
+        qtype = "finance_compute"
+    elif hints.get("requires_rag") and hints.get("requires_sql"):
+        qtype = "hybrid_sql_rag"
+    elif hints.get("requires_rag"):
+        qtype = "document_lookup"
     elif re.search(r"\b(roi|yoy|variance|percentage|share|reconcile|gap|mismatch|compare|growth)\b", q, re.I):
         qtype = "finance_compute"
     elif re.search(r"\b(policy|memo|email|chat|line works|document|thread|faq|minutes|explain|context)\b", q, re.I):
@@ -196,6 +361,7 @@ def planner_node(state: EnterpriseState) -> dict[str, Any]:
         plan, errors = validate_plan(payload)
         if not plan.get("goal"):
             plan["goal"] = question
+    plan = _apply_plan_hints(plan, state)
     return {
         "plan": plan,
         "errors": list(state.get("errors") or []) + errors,
@@ -209,6 +375,7 @@ def planner_json_validation_hook(state: EnterpriseState) -> dict[str, Any]:
         repaired, repair_errors = validate_plan({**fallback_plan(state.get("safe_underlying_question", ""), state.get("question_type", "unknown")), **plan})
         plan = repaired
         errors.extend(repair_errors)
+    plan = _apply_plan_hints(plan, state)
     return {
         "plan": plan,
         "errors": list(state.get("errors") or []) + errors,
@@ -527,6 +694,8 @@ def answer_checker_node(state: EnterpriseState) -> dict[str, Any]:
 def output_formatter_hook(state: EnterpriseState) -> dict[str, Any]:
     answer = str(state.get("final_answer") or state.get("answer_candidate") or "")
     answer = re.sub(r"```(?:json)?[\s\S]*?```", "", answer).strip()
+    answer = _OUTPUT_CANARY_RE.sub("", answer)
+    answer = _OUTPUT_CONFIRM_LINK_RE.sub("", answer)
     answer = remove_forced_strings(answer, state.get("injection_reasons", []))
     if state.get("validation", {}).get("should_refuse") and not is_wellformed_refusal(answer):
         answer = refusal_answer(
