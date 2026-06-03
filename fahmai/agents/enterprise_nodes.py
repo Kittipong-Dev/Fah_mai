@@ -5,37 +5,40 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fahmai.agents.config import ENTERPRISE_TOP_K
-from fahmai.agents.enterprise_state import EnterpriseState, SpecialistResult
+from fahmai.agents.config import REPLAN_BUDGET
+from fahmai.agents.enterprise_state import EnterpriseState
 from fahmai.agents.enterprise_utils import (
-    EN_PROMPT_INJECTION_PREFIX,
-    THAI_PROMPT_INJECTION_PREFIX,
     build_terms,
     detect_language,
     extract_entities,
     fallback_plan,
-    is_valid_readonly_sql,
     is_wellformed_refusal,
+    needs_thai_language_rewrite,
     normalize_fiscal_expressions,
     normalize_month_names,
     normalize_years,
     refusal_answer,
     remove_forced_strings,
+    sanitize_refusal_topic,
     safe_json_loads,
-    strip_sql_fences,
     validate_plan,
 )
 from fahmai.agents.guardrails.input_guard import scan_input
 from fahmai.agents.llm import make_llm
 from fahmai.agents.prompts.enterprise import (
     ANSWER_CHECKER_SYS,
-    COMPUTE_SYS,
     FINAL_ANALYZER_SYS,
+    LANGUAGE_GUARD_SYS,
     LLM_INJECTION_GUARDRAIL_SYS,
     PLANNER_ENTERPRISE_SYS,
-    SQL_GENERATOR_SYS,
 )
 from fahmai.agents.query_log import append_query_log
+from fahmai.agents.specialists import (
+    enterprise_compute,
+    enterprise_rag,
+    enterprise_refusal,
+    enterprise_sql,
+)
 
 _EXTRA_INJECTION = {
     "developer_instruction": re.compile(r"developer instruction", re.I),
@@ -217,233 +220,151 @@ def _subtasks_for(state: EnterpriseState, specialist: str) -> list[dict[str, Any
     return [st for st in (state.get("plan", {}).get("subtasks") or []) if st.get("specialist") == specialist]
 
 
-def sql_specialist_node(state: EnterpriseState) -> dict[str, Any]:
-    subtasks = _subtasks_for(state, "sql")
-    if not subtasks:
-        return {}
-    from fahmai.tools.sql_tool import sql_query
+def planned_worker_groups(state: EnterpriseState) -> dict[str, list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for st in state.get("plan", {}).get("subtasks") or []:
+        specialist = st.get("specialist")
+        if specialist in {"sql", "rag", "refusal"}:
+            groups.setdefault(str(specialist), []).append(st)
+    return groups
 
-    all_queries: list[str] = []
-    rows: list[dict[str, Any]] = []
-    evidence: list[dict[str, Any]] = []
-    warnings: list[str] = []
-    status = "success"
-    refusal_topic: str | None = None
-    for st in subtasks:
-        payload = _llm_json(
-            SQL_GENERATOR_SYS,
-            str(
-                {
-                    "normalized_question": state.get("normalized_question"),
-                    "task": st.get("task"),
-                    "depends_on": st.get("depends_on", []),
-                    "entities": state.get("normalized_entities"),
-                    "date_constraints": state.get("date_constraints"),
-                    "prior_specialist_results": state.get("specialist_results", {}),
-                    "prior_sql_rows": rows,
-                }
-            ),
-        )
-        if payload.get("_error"):
-            if not evidence:
-                status = "error"
-            warnings.append(payload["_error"][:160])
-            continue
-        if payload.get("status") == "schema_missing":
-            if not evidence:
-                status = "schema_missing"
-            refusal_topic = payload.get("refusal_topic") or st.get("task")
-            warnings.extend(payload.get("warnings") or [])
-            continue
-        queries = [strip_sql_fences(q) for q in payload.get("queries", []) if q]
-        if not queries:
-            if not evidence:
-                status = "schema_missing"
-            refusal_topic = st.get("task")
-            warnings.append("SQL generator returned no query.")
-            continue
-        for sql in queries[:3]:
-            if not is_valid_readonly_sql(sql):
-                status = "error"
-                warnings.append(f"Blocked non-read-only SQL: {sql[:120]}")
-                continue
-            result = sql_query(sql)
-            all_queries.append(sql)
-            row = {"task_id": st.get("id"), "sql": sql, "result": result}
-            rows.append(row)
-            if result.startswith("SQL ERROR:"):
-                if not evidence:
-                    status = "error"
-                warnings.append(result)
-            elif result.strip() == "(0 rows)":
-                if status != "error" and not evidence:
-                    status = "no_data"
-                refusal_topic = refusal_topic or st.get("task")
-            else:
-                evidence.append(
-                    {
-                        "source": "postgres",
-                        "table_or_view": "query_result",
-                        "claim": st.get("task") or "",
-                        "value": result,
-                    }
-                )
-                status = "success"
-                refusal_topic = None
-    if evidence:
-        status = "success"
-    result: SpecialistResult = {
-        "status": status,
-        "queries": all_queries,
-        "rows": rows,
-        "summary": "SQL queries executed." if evidence else "No SQL evidence found.",
-        "evidence": evidence,
-        "refusal_topic": refusal_topic,
-        "warnings": warnings,
+
+def has_pending_compute(state: EnterpriseState) -> bool:
+    return bool(_subtasks_for(state, "finance_compute")) and "finance_compute" not in (state.get("specialist_results") or {})
+
+
+def specialist_worker_node(state: EnterpriseState) -> dict[str, Any]:
+    specialist = str(state.get("active_specialist") or "")
+    worker_state: EnterpriseState = {
+        **state,
+        "logs": [],
+        "evidence": [],
+        "final_answer": "",
+        "answer_candidate": "",
     }
+    subtasks = list(state.get("active_subtasks") or [])
+    if specialist == "sql":
+        result = enterprise_sql.run(worker_state, subtasks, _llm_json, _append_log)
+    elif specialist == "rag":
+        result = enterprise_rag.run(worker_state, subtasks, _append_log)
+    elif specialist == "refusal":
+        result = enterprise_refusal.run(worker_state, subtasks, _append_log)
+    else:
+        result = {"logs": _append_log(worker_state, {"node": "specialist_worker", "status": "unknown", "specialist": specialist})}
+    return {
+        "worker_outputs": [
+            {
+                "attempt": int(state.get("active_attempt") or 0),
+                "specialist": specialist,
+                "result": result,
+            }
+        ]
+    }
+
+
+def aggregate_specialist_outputs_node(state: EnterpriseState) -> dict[str, Any]:
+    attempt = int(state.get("replan_attempts") or 0)
+    outputs = [out for out in state.get("worker_outputs", []) if out.get("attempt") == attempt]
     specialist_results = dict(state.get("specialist_results") or {})
-    specialist_results["sql"] = result
+    evidence = list(state.get("evidence") or [])
+    logs = list(state.get("logs") or [])
+    refusal_topic = state.get("refusal_topic")
+    final_answer = state.get("final_answer")
+    answer_candidate = state.get("answer_candidate")
+
+    for out in outputs:
+        result = out.get("result") or {}
+        specialist_results.update(result.get("specialist_results") or {})
+        evidence.extend(result.get("evidence") or [])
+        logs.extend(result.get("logs") or [])
+        if result.get("refusal_topic"):
+            refusal_topic = refusal_topic or result.get("refusal_topic")
+        if result.get("final_answer"):
+            final_answer = result.get("final_answer")
+        if result.get("answer_candidate"):
+            answer_candidate = result.get("answer_candidate")
+
+    logs = _append_log(
+        {**state, "logs": logs},
+        {
+            "node": "aggregate_specialist_outputs",
+            "attempt": attempt,
+            "specialists": [out.get("specialist") for out in outputs],
+        },
+    )
     return {
         "specialist_results": specialist_results,
-        "evidence": list(state.get("evidence") or []) + evidence,
-        "refusal_topic": state.get("refusal_topic") or refusal_topic,
-        "logs": _append_log(state, {"node": "sql_specialist", "queries": all_queries, "status": status}),
+        "evidence": evidence,
+        "logs": logs,
+        "refusal_topic": refusal_topic,
+        "final_answer": final_answer,
+        "answer_candidate": answer_candidate,
     }
+
+
+def sql_specialist_node(state: EnterpriseState) -> dict[str, Any]:
+    return enterprise_sql.run(state, _subtasks_for(state, "sql"), _llm_json, _append_log)
 
 
 def rag_specialist_node(state: EnterpriseState) -> dict[str, Any]:
-    subtasks = _subtasks_for(state, "rag")
-    if not subtasks:
-        return {}
-    from fahmai.tools.doc_tool import search_docs
-
-    search_queries: list[str] = []
-    vector_results: list[dict[str, Any]] = []
-    keyword_results: list[dict[str, Any]] = []
-    evidence: list[dict[str, Any]] = []
-    warnings: list[str] = []
-    terms = state.get("normalized_entities", {}).get("search_keywords") or []
-    status = "no_data"
-    refusal_topic: str | None = None
-    for st in subtasks:
-        task = str(st.get("task") or state.get("safe_underlying_question") or "")
-        variants = list(dict.fromkeys([*terms[:5], task]))
-        for idx, query in enumerate(variants[:6]):
-            if not query:
-                continue
-            search_queries.append(query)
-            keyword = query if idx < 5 else None
-            raw = search_docs(query, keyword=keyword, k=ENTERPRISE_TOP_K)
-            bucket = {"query": query, "result": raw}
-            if keyword:
-                keyword_results.append(bucket)
-            else:
-                vector_results.append(bucket)
-            if raw and not raw.startswith(("SEARCH ERROR:", "(no matching documents)")):
-                status = "success"
-                evidence.append(
-                    {
-                        "source": "markdown" if keyword else "vector",
-                        "doc_id": "search_result",
-                        "chunk_id": query,
-                        "claim": task,
-                        "quote_or_snippet": raw[:1200],
-                    }
-                )
-            elif raw.startswith("SEARCH ERROR:"):
-                status = "error"
-                warnings.append(raw)
-        if status == "no_data":
-            refusal_topic = refusal_topic or task
-    result: SpecialistResult = {
-        "status": status,
-        "search_queries": search_queries,
-        "vector_results": vector_results,
-        "keyword_results": keyword_results,
-        "summary": "Document evidence found." if evidence else "No document evidence found.",
-        "evidence": evidence,
-        "refusal_topic": refusal_topic,
-        "warnings": warnings,
-    }
-    specialist_results = dict(state.get("specialist_results") or {})
-    specialist_results["rag"] = result
-    return {
-        "specialist_results": specialist_results,
-        "evidence": list(state.get("evidence") or []) + evidence,
-        "refusal_topic": state.get("refusal_topic") or refusal_topic,
-        "logs": _append_log(state, {"node": "rag_specialist", "search_queries": search_queries, "status": status}),
-    }
+    return enterprise_rag.run(state, _subtasks_for(state, "rag"), _append_log)
 
 
 def finance_compute_specialist_node(state: EnterpriseState) -> dict[str, Any]:
-    subtasks = _subtasks_for(state, "finance_compute")
-    if not subtasks:
-        return {}
-    payload = _llm_json(
-        COMPUTE_SYS,
-        str(
-            {
-                "question": state.get("safe_underlying_question"),
-                "subtasks": subtasks,
-                "specialist_results": state.get("specialist_results", {}),
-            }
-        ),
-    )
-    if payload.get("_error") or not payload:
-        payload = {
-            "status": "missing_input",
-            "inputs_used": [],
-            "calculations": [],
-            "summary": "Required verified numeric inputs are missing.",
-            "evidence": [],
-            "refusal_topic": state.get("safe_underlying_question"),
-            "warnings": [payload.get("_error", "compute returned no JSON") if payload else "compute returned no JSON"],
+    return enterprise_compute.run(state, _subtasks_for(state, "finance_compute"), _llm_json, _append_log)
+
+
+def specialist_coverage_node(state: EnterpriseState) -> dict[str, Any]:
+    results = state.get("specialist_results") or {}
+    required = [st for st in state.get("plan", {}).get("subtasks", []) if st.get("required", True)]
+    failed = []
+    for st in required:
+        specialist = str(st.get("specialist") or "")
+        res = results.get(specialist)
+        if res and res.get("status") == "error":
+            failed.append(st)
+    attempts = int(state.get("replan_attempts") or 0)
+    if failed and attempts < REPLAN_BUDGET:
+        plan = dict(state.get("plan") or {})
+        plan["subtasks"] = failed
+        return {
+            "plan": plan,
+            "failed_subtasks": failed,
+            "replan_attempts": attempts + 1,
+            "logs": _append_log(
+                state,
+                {
+                    "node": "specialist_coverage",
+                    "action": "retry_failed_subtasks",
+                    "failed_ids": [st.get("id") for st in failed],
+                    "attempt": attempts + 1,
+                },
+            ),
         }
-    result: SpecialistResult = {
-        "status": str(payload.get("status") or "missing_input"),
-        "summary": str(payload.get("summary") or ""),
-        "evidence": list(payload.get("evidence") or []),
-        "refusal_topic": payload.get("refusal_topic"),
-        "warnings": list(payload.get("warnings") or []),
-    }
-    result["rows"] = [{"inputs_used": payload.get("inputs_used", []), "calculations": payload.get("calculations", [])}]
-    specialist_results = dict(state.get("specialist_results") or {})
-    specialist_results["finance_compute"] = result
     return {
-        "specialist_results": specialist_results,
-        "evidence": list(state.get("evidence") or []) + result.get("evidence", []),
-        "refusal_topic": state.get("refusal_topic") or result.get("refusal_topic"),
-        "logs": _append_log(state, {"node": "finance_compute", "status": result["status"]}),
+        "failed_subtasks": [],
+        "logs": _append_log(
+            state,
+            {
+                "node": "specialist_coverage",
+                "action": "continue",
+                "failed_ids": [st.get("id") for st in failed],
+                "attempt": attempts,
+            },
+        ),
     }
+
+
+def route_specialist_coverage(state: EnterpriseState) -> str:
+    if state.get("failed_subtasks"):
+        return "planner_json_validation"
+    if has_pending_compute(state):
+        return "finance_compute_specialist"
+    return "evidence_validator"
 
 
 def refusal_specialist_node(state: EnterpriseState) -> dict[str, Any]:
-    needs_refusal = bool(state.get("validation", {}).get("should_refuse")) or bool(_subtasks_for(state, "refusal"))
-    if not needs_refusal:
-        return {}
-    validation = state.get("validation") or {}
-    rtype = validation.get("refusal_type") or ("prompt_injection" if state.get("is_prompt_injection") else "data_not_found")
-    topic = validation.get("refusal_topic") or state.get("refusal_topic") or state.get("safe_underlying_question") or "requested topic"
-    base_type = "schema_missing" if rtype == "schema_missing" else "data_not_found"
-    answer = refusal_answer(str(topic), state.get("language", "en"), base_type)
-    if rtype == "prompt_injection":
-        prefix = EN_PROMPT_INJECTION_PREFIX if state.get("language") == "en" else THAI_PROMPT_INJECTION_PREFIX
-        answer = f"{prefix}\n{answer}"
-    result: SpecialistResult = {
-        "status": "success",
-        "summary": answer,
-        "evidence": [],
-        "refusal_topic": str(topic),
-        "warnings": [],
-    }
-    specialist_results = dict(state.get("specialist_results") or {})
-    specialist_results["refusal"] = result
-    return {
-        "specialist_results": specialist_results,
-        "answer_candidate": answer,
-        "final_answer": answer,
-        "logs": _append_log(state, {"node": "refusal_specialist", "refusal_type": rtype, "topic": topic}),
-    }
+    return enterprise_refusal.run(state, _subtasks_for(state, "refusal"), _append_log)
 
 
 def evidence_validator_node(state: EnterpriseState) -> dict[str, Any]:
@@ -460,7 +381,10 @@ def evidence_validator_node(state: EnterpriseState) -> dict[str, Any]:
             continue
         if not res or res.get("status") in {"no_data", "schema_missing", "missing_input", "error"}:
             missing.append(str(st.get("task") or st.get("id")))
-            refusal_topic = res.get("refusal_topic") if res else refusal_topic
+            refusal_topic = sanitize_refusal_topic(
+                res.get("refusal_topic") if res else str(st.get("task") or st.get("id")),
+                state.get("safe_underlying_question") or state.get("normalized_question"),
+            )
             if res and res.get("status") == "schema_missing":
                 refusal_type = "schema_missing"
     if not evidence and required:
@@ -515,6 +439,59 @@ def final_analyzer_node(state: EnterpriseState) -> dict[str, Any]:
     }
 
 
+def language_guard_node(state: EnterpriseState) -> dict[str, Any]:
+    answer = str(state.get("final_answer") or state.get("answer_candidate") or "")
+    language = state.get("language", "en")
+    if not needs_thai_language_rewrite(language, answer):
+        return {
+            "logs": _append_log(
+                state,
+                {"node": "language_guard", "rewritten": False, "language": language},
+            )
+        }
+    payload = {
+        "question": state.get("safe_underlying_question") or state.get("normalized_question"),
+        "answer": answer,
+        "language": language,
+    }
+    try:
+        rewritten = make_llm(0.0).invoke([("system", LANGUAGE_GUARD_SYS), ("human", str(payload))]).content
+        rewritten = str(rewritten or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "logs": _append_log(
+                state,
+                {
+                    "node": "language_guard",
+                    "rewritten": False,
+                    "language": language,
+                    "error": str(exc)[:160],
+                },
+            )
+        }
+    if not rewritten:
+        return {
+            "logs": _append_log(
+                state,
+                {"node": "language_guard", "rewritten": False, "language": language, "error": "empty rewrite"},
+            )
+        }
+    return {
+        "answer_candidate": rewritten,
+        "final_answer": rewritten,
+        "logs": _append_log(
+            state,
+            {
+                "node": "language_guard",
+                "rewritten": True,
+                "language": language,
+                "answer_len_before": len(answer),
+                "answer_len_after": len(rewritten),
+            },
+        ),
+    }
+
+
 def answer_checker_node(state: EnterpriseState) -> dict[str, Any]:
     answer = state.get("final_answer") or state.get("answer_candidate") or ""
     payload = _llm_json(
@@ -534,7 +511,10 @@ def answer_checker_node(state: EnterpriseState) -> dict[str, Any]:
         passed = False
         issues.append("refusal is not well formed")
         answer = refusal_answer(
-            str(state.get("validation", {}).get("refusal_topic") or state.get("refusal_topic") or "requested topic"),
+            sanitize_refusal_topic(
+                str(state.get("validation", {}).get("refusal_topic") or state.get("refusal_topic") or ""),
+                state.get("safe_underlying_question") or state.get("normalized_question"),
+            ),
             state.get("language", "en"),
             "schema_missing" if state.get("validation", {}).get("refusal_type") == "schema_missing" else "data_not_found",
         )
@@ -550,7 +530,10 @@ def output_formatter_hook(state: EnterpriseState) -> dict[str, Any]:
     answer = remove_forced_strings(answer, state.get("injection_reasons", []))
     if state.get("validation", {}).get("should_refuse") and not is_wellformed_refusal(answer):
         answer = refusal_answer(
-            str(state.get("validation", {}).get("refusal_topic") or state.get("refusal_topic") or "requested topic"),
+            sanitize_refusal_topic(
+                str(state.get("validation", {}).get("refusal_topic") or state.get("refusal_topic") or ""),
+                state.get("safe_underlying_question") or state.get("normalized_question"),
+            ),
             state.get("language", "en"),
             "schema_missing" if state.get("validation", {}).get("refusal_type") == "schema_missing" else "data_not_found",
         )

@@ -2,7 +2,8 @@
 """Stable JSON-like state contracts for the enterprise data-agent graph."""
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+import operator
+from typing import Annotated, Any, Literal, TypedDict
 
 Language = Literal["th", "en", "mixed"]
 QuestionType = Literal[
@@ -90,3 +91,9 @@ class EnterpriseState(TypedDict, total=False):
     refusal_topic: str | None
     errors: list[str]
     logs: list[dict[str, Any]]
+    failed_subtasks: list[PlanSubtask]
+    replan_attempts: int
+    worker_outputs: Annotated[list[dict[str, Any]], operator.add]
+    active_specialist: Specialist
+    active_subtasks: list[PlanSubtask]
+    active_attempt: int

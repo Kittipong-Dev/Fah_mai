@@ -50,8 +50,17 @@ SCOPE_MARKERS = (
 
 _THAI_RE = re.compile(r"[\u0e00-\u0e7f]")
 _ASCII_WORD_RE = re.compile(r"[A-Za-z]{3,}")
+_EN_PROSE_WORD_RE = re.compile(r"\b[A-Za-z][A-Za-z']{2,}\b")
 _BE_YEAR_RE = re.compile(r"(?<![\w-])(25[6-9][0-9])(?![\w-])")
 _QUARTER_RE = re.compile(r"\b(?:FY|fiscal\s+year)?\s*(20\d{2}|25[6-9]\d)\s*Q([1-4])\b", re.I)
+_INTERNAL_TASK_RE = re.compile(
+    r"^\s*(query|select|for the date identified|for that specific|calculate:|calculate\b|group by|join\b|use\b)",
+    re.I,
+)
+_SQLISH_RE = re.compile(
+    r"\b(v_[a-z0-9_]+|fact_[a-z0-9_]+|dim_[a-z0-9_]+|where|group by|order by|business_event_date|posting_date)\b",
+    re.I,
+)
 
 THAI_MONTHS = {
     "\u0e21\u0e01\u0e23\u0e32\u0e04\u0e21": "01",
@@ -92,6 +101,49 @@ def detect_language(text: str) -> Language:
     if has_thai:
         return "th"
     return "en"
+
+
+def thai_char_count(text: str) -> int:
+    return len(_THAI_RE.findall(text or ""))
+
+
+def english_prose_word_count(text: str) -> int:
+    words = []
+    for match in _EN_PROSE_WORD_RE.finditer(text or ""):
+        token = match.group(0)
+        if token.isupper():
+            continue
+        words.append(token)
+    return len(words)
+
+
+def needs_thai_language_rewrite(language: Language | str | None, answer: str) -> bool:
+    if language == "en":
+        return False
+    thai_chars = thai_char_count(answer)
+    english_words = english_prose_word_count(answer)
+    if not (answer or "").strip():
+        return False
+    if thai_chars < 8 and english_words >= 4:
+        return True
+    return english_words >= 10 and thai_chars < english_words * 2
+
+
+def looks_like_internal_task(text: str) -> bool:
+    clean = (text or "").strip()
+    if not clean:
+        return False
+    return bool(_INTERNAL_TASK_RE.search(clean)) or (
+        len(clean) > 120 and bool(_SQLISH_RE.search(clean))
+    )
+
+
+def sanitize_refusal_topic(topic: str | None, fallback: str | None = None) -> str:
+    clean = (topic or "").strip()
+    backup = (fallback or "requested topic").strip() or "requested topic"
+    if looks_like_internal_task(clean):
+        return backup
+    return clean or backup
 
 
 def be_to_ce(year: int) -> int:
