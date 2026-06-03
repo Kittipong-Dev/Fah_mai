@@ -330,6 +330,7 @@ def validate_plan(plan: dict[str, Any]) -> tuple[Plan, list[str]]:
         if specialist not in allowed:
             errors.append(f"subtask {idx} has invalid specialist")
             specialist = "refusal"
+        retrieval_hints = st.get("retrieval_hints") if isinstance(st.get("retrieval_hints"), dict) else {}
         cleaned.append(
             {
                 "id": str(st.get("id") or f"{specialist}-{idx}"),
@@ -338,6 +339,7 @@ def validate_plan(plan: dict[str, Any]) -> tuple[Plan, list[str]]:
                 "depends_on": list(st.get("depends_on") or []),
                 "required": bool(st.get("required", True)),
                 "expected_output": str(st.get("expected_output") or ""),
+                "retrieval_hints": retrieval_hints,
             }
         )
     fixed: Plan = {

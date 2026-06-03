@@ -15,6 +15,7 @@ from fahmai.agents.enterprise_nodes import (
     rule_based_injection_guardrail_node,
     specialist_coverage_node,
 )
+from fahmai.agents.rag_specialist import run_rag_specialist_task
 from fahmai.agents.enterprise_utils import (
     is_valid_readonly_sql,
     is_wellformed_refusal,
@@ -79,6 +80,76 @@ class EnterprisePipelineTests(unittest.TestCase):
         )
         self.assertTrue(errors)
         self.assertEqual(plan["subtasks"][0]["specialist"], "refusal")
+
+    def test_planner_preserves_rag_retrieval_hints(self):
+        plan, errors = validate_plan(
+            {
+                "goal": "find memo evidence",
+                "subtasks": [
+                    {
+                        "id": "rag-1",
+                        "specialist": "rag",
+                        "task": "Find campaign evidence",
+                        "retrieval_hints": {
+                            "exact_ids": ["SF-LAUNCH-2568"],
+                            "aliases": ["Galaxy Pro launch campaign"],
+                            "max_retries": 3,
+                        },
+                    }
+                ],
+            }
+        )
+        self.assertFalse(errors)
+        self.assertEqual(plan["subtasks"][0]["retrieval_hints"]["exact_ids"], ["SF-LAUNCH-2568"])
+
+    def test_rag_specialist_retries_until_trusted_evidence(self):
+        calls = []
+
+        def fake_search_docs(query, channel=None, topic=None, date_from=None, date_to=None, keyword=None, k=8):
+            calls.append({"query": query, "keyword": keyword, "k": k})
+            if "Galaxy Pro" not in query:
+                return "(no matching documents)"
+            return (
+                "[0.910] MEMO-PM7-2025-04-01 (memo, 2025-04-01, topic=SF-LAUNCH-2568)\n"
+                "    SF-LAUNCH-2568 Galaxy Pro launch campaign memo confirms redemption issue evidence."
+            )
+
+        result = run_rag_specialist_task(
+            {
+                "id": "rag-1",
+                "task": "Find evidence for SF-LAUNCH-2568 campaign issue",
+                "retrieval_hints": {
+                    "exact_ids": ["SF-LAUNCH-2568"],
+                    "primary_terms": ["Galaxy Pro"],
+                    "aliases": ["launch campaign"],
+                    "max_retries": 3,
+                },
+            },
+            {"date_constraints": {}, "normalized_entities": {}},
+            search_fn=fake_search_docs,
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertGreaterEqual(len(result["attempts"]), 2)
+        self.assertEqual(result["attempts"][-1]["quality"], "strong")
+        self.assertTrue(result["evidence"])
+        self.assertGreaterEqual(len(calls), 4)
+
+    def test_rag_specialist_no_data_exhausts_max_retries(self):
+        def fake_search_docs(query, channel=None, topic=None, date_from=None, date_to=None, keyword=None, k=8):
+            return "(no matching documents)"
+
+        result = run_rag_specialist_task(
+            {
+                "id": "rag-1",
+                "task": "Find memo MEMO-ABSENT-2025-04",
+                "retrieval_hints": {"exact_ids": ["MEMO-ABSENT-2025-04"], "max_retries": 3},
+            },
+            {"date_constraints": {}, "normalized_entities": {}},
+            search_fn=fake_search_docs,
+        )
+        self.assertEqual(result["status"], "no_data")
+        self.assertEqual(len(result["attempts"]), 3)
+        self.assertEqual(result["warnings"], ["retrieval exhausted after max_retries"])
 
     def test_evidence_validator_rejects_unsupported_answer(self):
         out = evidence_validator_node(
