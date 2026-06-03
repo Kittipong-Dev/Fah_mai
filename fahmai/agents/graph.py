@@ -134,9 +134,14 @@ def n_plan(state: State):
 
 
 def _specialist_kind(st: dict) -> str:
-    """Resolve specialist kind: sql | doc | rag (default sql for unknown)."""
+    """Resolve specialist kind: sql | rag (default sql for unknown).
+
+    'doc' is deprecated (its Supabase doc_corpus content now lives in the grading-DB rag_chunks),
+    so any legacy 'doc' route is folded into 'rag'."""
     s = (st.get("specialist") or "").lower()
-    return s if s in ("sql", "doc", "rag") else "sql"
+    if s == "doc":
+        return "rag"
+    return s if s in ("sql", "rag") else "sql"
 
 
 async def n_worker(payload: dict):

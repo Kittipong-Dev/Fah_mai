@@ -10,7 +10,7 @@ import re
 
 from sqlalchemy import text
 
-from fahmai.tools import ENGINE
+from fahmai.tools import SQL_ENGINE as ENGINE
 
 # The real guard is `SET TRANSACTION READ ONLY` (Postgres rejects any write at execute).
 # This regex is a secondary check, applied AFTER stripping string literals + comments so that

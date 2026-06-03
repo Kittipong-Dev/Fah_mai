@@ -47,6 +47,29 @@ def get_engine() -> Engine:
     return create_engine(database_url(), pool_pre_ping=True)
 
 
+# --- SQL-analyst engine: the grading DB (fah_sai_lpk_* schemas) ------------------
+# If FAHMAI_SQL_DATABASE_URL is set, the sql_query tool runs against it (with search_path
+# pre-set to the model + core schemas so unqualified table names resolve). Falls back to the
+# Supabase engine when unset, so existing setups keep working.
+# SQL agent surface = the 8 model views only (per the fah_sai_lpk_meta agent guide).
+# rag/mart/raw schemas are intentionally excluded; document content is the rag specialist's job.
+SQL_SEARCH_PATH = os.getenv(
+    "FAHMAI_SQL_SEARCH_PATH",
+    "fah_sai_lpk_model,fah_sai_lpk_core",
+)
+
+
+def get_sql_engine() -> Engine:
+    url = os.getenv("FAHMAI_SQL_DATABASE_URL")
+    if not url:
+        return get_engine()
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args={"options": f"-csearch_path={SQL_SEARCH_PATH}"},
+    )
+
+
 if __name__ == "__main__":
     from sqlalchemy import text
 

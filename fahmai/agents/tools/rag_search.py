@@ -23,11 +23,13 @@ from __future__ import annotations
 from langchain_core.tools import tool
 from sqlalchemy import text
 
+import os
+
 from fahmai.embed import rag_embed_batch
 from fahmai.rag_db import RAG_ENGINE
 
 SNIPPET = 500
-_RAG_DIM = 4096
+_RAG_DIM = int(os.getenv("RAG_EMBED_DIM", "1024"))
 
 
 def _vec(query: str) -> list[float] | None:
@@ -40,6 +42,28 @@ def _vec(query: str) -> list[float] | None:
 
 def _fmt_vec(v: list[float]) -> str:
     return "[" + ",".join(f"{x:.5f}" for x in v) + "]"
+
+
+def _match_official(vec: list[float], k: int) -> str | None:
+    """Official retrieval contract: fah_sai_lpk_rag.match_public_chunks_bge_m3 (parent-child BGE-M3).
+    Returns hydrated parent_text + source_table/source_pk for citation. None on error."""
+    try:
+        with RAG_ENGINE.connect() as c:
+            rows = c.execute(text("""
+                SELECT source_table, source_pk, source_path, similarity,
+                       left(parent_text, 700) AS parent_text, left(chunk_text, 300) AS chunk_text
+                FROM fah_sai_lpk_rag.match_public_chunks_bge_m3(cast(:q AS vector(1024)), :k, 80)
+            """), {"q": _fmt_vec(vec), "k": int(k)}).fetchall()
+    except Exception:  # noqa: BLE001
+        return None
+    if not rows:
+        return "(no matching chunks)"
+    out = []
+    for r in rows:
+        cite = f" src={r.source_table}/{r.source_pk}" if r.source_table else (f" path={r.source_path}" if r.source_path else "")
+        txt = " ".join((r.parent_text or r.chunk_text or "").split())
+        out.append(f"[{r.similarity:.3f}]{cite}\n    {txt}")
+    return "\n".join(out)
 
 
 def search_rag(
@@ -57,6 +81,17 @@ def search_rag(
     record_id: str | None = None,
     k: int = 5,
 ) -> str:
+    # No targeted filters -> use the official BGE-M3 parent-child retrieval function (the contract).
+    has_filter = any([source_type, date_from, date_to, keyword, branch_code, sku_id,
+                      period, quarter, report_family, metric_group, record_id])
+    if not has_filter:
+        vec0 = _vec(query)
+        if vec0:
+            res = _match_official(vec0, k)
+            if res is not None:
+                return res
+        # else fall through to keyword fallback below
+
     where, params = [], {"k": int(k)}
 
     if source_type:

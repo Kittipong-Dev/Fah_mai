@@ -1,14 +1,14 @@
 id,response
-L3-Q-EASY-001,"MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) คือ 42,900.00 บาท"
-L3-Q-EASY-002,ใน FACT_VENDOR_PAYMENT มีรายการ vendor payment ทั้งหมด 767 รายการที่เดือนและปีของ posting_date ไม่ตรงกับเดือนและปีของ business_event_date
-L3-Q-EASY-003,"รายการขนส่งทั้งหมดของ FahMai ในตาราง FACT_SHIPPING ถูกจัดการโดย vendor ดังนี้: 1. **VeloShip**: ส่วนแบ่ง 100% (จำนวน 23,182 รายการ จากทั้งหมด 23,182 รายการ)"
-L3-Q-EASY-004,พนักงาน CS ที่มีจำนวน interaction บันทึกไว้มากที่สุดคือ employee_id: EMP-L3-00010 โดยมีจำนวนการปฏิสัมพันธ์ทั้งหมด 730 ครั้ง
-L3-Q-EASY-005,FahMai มี vendor ที่เป็น partner brand ทั้งหมด 2 ราย โดยมี vendor_id ดังนี้: 1. V-001 (NovaTech) 2. V-002 (NovaTech Service)
-L3-Q-EASY-006,"ในปี 2024-2025 สาขาของฟ้าใหม่ที่มีจำนวน transaction การขายมากที่สุดคือ สาขา **FahMai Siam** โดยมีจำนวน transaction ทั้งหมด 18,084 รายการ และมียอดรายได้รวม (net_total_thb) เท่ากับ **1,039,386,349.00 บาท**"
-L3-Q-EASY-007,"จำนวนลูกค้าในแต่ละระดับสมาชิก (loyalty_tier) จากฐานข้อมูลลูกค้าของฟ้าใหม่ มีดังนี้ครับ: - **none**: 7,800 ราย - **gold**: 7,500 ราย - **platinum**: 7,500 ราย - **silver**: 7,200 ราย"
-L3-Q-EASY-008,FahMai มีสาขา/สถานที่ทั้งหมด 11 แห่งในไดเรกทอรี DIM_BRANCH ซึ่งนับรวมทุกประเภททั้งสำนักงานใหญ่ สาขาหน้าร้าน และช่องทาง remote แล้ว
-L3-Q-EASY-009,CEO ของ FahMai ณ วันที่ 1 มิถุนายน 2568 คือ Naret Vision
-L3-Q-EASY-010,ระยะเวลารับประกันของสินค้ารหัส AW-MN-001 (ArcWave monitor flagship) ตามที่ระบุในไดเรกทอรี DIM_PRODUCT คือ 24 เดือน
+L3-Q-EASY-001,(timeout)
+L3-Q-EASY-002,(timeout)
+L3-Q-EASY-003,(timeout)
+L3-Q-EASY-004,
+L3-Q-EASY-005,
+L3-Q-EASY-006,
+L3-Q-EASY-007,
+L3-Q-EASY-008,
+L3-Q-EASY-009,
+L3-Q-EASY-010,
 L3-Q-EASY-011,นโยบาย refund signing authority ladder ฉบับล่าสุดของฟ้าใหม่ มีผลบังคับใช้ตั้งแต่วันที่ 2025-02-15
 L3-Q-EASY-012,"ราคา MSRP ของสินค้ารหัส SF-Galaxy-Pro-2568 (SaiFah smartphone flagship) คือ 38,900.00 บาท"
 L3-Q-EASY-013,FahMai มี vendor (คู่ค้า/ซัพพลายเออร์) ทั้งหมด 6 รายในไดเรกทอรี DIM_VENDOR
