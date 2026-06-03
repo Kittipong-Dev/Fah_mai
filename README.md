@@ -100,7 +100,11 @@ uv run uvicorn fahmai.api:app --host 0.0.0.0 --port 8000
 }
 ```
 
-Interactive docs: **http://localhost:8000/docs**
+Interactive docs: **http://localhost:8000/docs** · Full API reference: **[docs/API.md](docs/API.md)**
+
+The API exposes two endpoints:
+- `POST /answer` — ask the agent a question → `{id, answer, total_output_token}`
+- `POST /ocr` — OCR a header + transaction documents (image/PDF base64) → `{id, answer:{header, transaction[], total_output_token}}`
 
 Progress monitor (during batch):
 ```bash

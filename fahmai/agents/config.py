@@ -43,6 +43,14 @@ TOOL_MODEL = os.getenv("FAHMAI_TOOL_MODEL", MODEL)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"  # kept for embed.py
 
+# OCR model (typhoon-ocr-preview) — served by the same GPU-switcher as the orchestration LLM.
+OCR_MODEL = os.getenv("FAHMAI_OCR_MODEL", "typhoon-ocr-preview")
+OCR_BASE_URL = os.getenv("FAHMAI_OCR_BASE_URL", LLM_BASE_URL)
+OCR_API_KEY_ENV = "FAHMAI_OCR_API_KEY" if os.getenv("FAHMAI_OCR_API_KEY") else LLM_API_KEY_ENV
+
+# Thai small LLM (served by the same switcher) — used by the /agent/thaillm endpoint.
+THAI_MODEL = os.getenv("FAHMAI_THAI_MODEL", "typhoon-ai/typhoon-s-thaillm-8b-instruct-research-preview")
+
 # --- runtime knobs (override via env) ---
 CONCURRENCY = int(os.getenv("FAHMAI_CONCURRENCY", "3"))      # questions in flight
 PER_Q_TIMEOUT = int(os.getenv("FAHMAI_Q_TIMEOUT", "600"))   # seconds per question

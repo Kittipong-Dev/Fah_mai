@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""FahMai answer API.
+"""FahMai API.
 
-POST /answer  {"question": "..."}
-->            {"id": "<uuid>", "answer": "...", "total_output_token": N}
+POST /agent/local     {"question": "..."}  -> agent on the local Gemma-31B
+POST /agent/thaillm   {"question": "..."}  -> agent on the Thai small LLM
+    both return       {"id": "<uuid>", "answer": "...", "total_output_token": N}
+
+POST /ocr             {"id","header","transaction":[...]}  (base64 image/pdf)
+    returns           {"id", "answer": {"header","transaction":[...],"total_output_token"}}
 
 total_output_token counts ALL tokens consumed across every LLM call in one request
 (classify, plan, workers, sql_verify, compute, synth, guard) via a LangChain callback.
@@ -20,7 +24,12 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from pydantic import BaseModel
 
+import anyio
+
+from fahmai.agents.config import THAI_MODEL
 from fahmai.agents.graph import aanswer, get_team
+from fahmai.agents.llm import reset_model_override, set_model_override
+from fahmai.ocr import run_ocr
 
 
 # ---------------------------------------------------------------------------
@@ -75,26 +84,93 @@ class AnswerResponse(BaseModel):
     total_output_token: int
 
 
+class OCRRequest(BaseModel):
+    id: str                       # question id (echoed back)
+    header: str                   # base64-encoded header image/pdf (data-URL prefix optional)
+    transaction: list[str] = []   # base64-encoded transaction images/pdfs
+
+
+class OCRResponse(BaseModel):
+    id: str
+    answer: dict                  # {"header": "...", "transaction": ["...", ...], "total_output_token": N}
+
+
 # ---------------------------------------------------------------------------
-# Endpoint
+# Agent endpoints
 # ---------------------------------------------------------------------------
 
-@app.post("/answer", response_model=AnswerResponse)
-async def answer_question(req: QuestionRequest) -> AnswerResponse:
-    if not req.question.strip():
+async def _run_agent(question: str, model: str | None) -> AnswerResponse:
+    """Run the agent; `model` (if given) overrides the orchestration LLM for this request."""
+    if not question.strip():
         raise HTTPException(status_code=422, detail="question must not be blank")
 
     counter = _TokenCounter()
+    token = set_model_override(model) if model else None
     try:
-        ans = await aanswer(req.question, callbacks=[counter])
+        ans = await aanswer(question, callbacks=[counter])
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if token is not None:
+            reset_model_override(token)
 
     return AnswerResponse(
         id=str(uuid.uuid4()),
         answer=ans,
         total_output_token=counter.total_tokens,
     )
+
+
+@app.post("/agent/local", response_model=AnswerResponse)
+async def agent_local(req: QuestionRequest) -> AnswerResponse:
+    """Agent powered by the local Gemma-31B (default orchestration model)."""
+    return await _run_agent(req.question, model=None)
+
+
+@app.post("/agent/thaillm", response_model=AnswerResponse)
+async def agent_thaillm(req: QuestionRequest) -> AnswerResponse:
+    """Agent with orchestration nodes running on the Thai small LLM."""
+    return await _run_agent(req.question, model=THAI_MODEL)
+
+
+def _strip_data_url(b64: str) -> str:
+    """Remove an optional data-URL prefix:  data:image/png;base64,XXXX -> XXXX"""
+    if b64.startswith("data:") and "," in b64:
+        return b64.split(",", 1)[1]
+    return b64
+
+
+@app.post("/ocr", response_model=OCRResponse)
+async def ocr(req: OCRRequest) -> OCRResponse:
+    if not req.header.strip():
+        raise HTTPException(status_code=422, detail="header must not be blank")
+
+    total_tokens = 0
+
+    def _ocr_one(b64: str) -> str:
+        nonlocal total_tokens
+        out = run_ocr(_strip_data_url(b64))
+        total_tokens += out["total_output_token"]
+        return out["result"]
+
+    try:
+        # run sequentially in a worker thread (sync httpx) to avoid blocking the loop
+        def _process() -> dict:
+            header_text = _ocr_one(req.header)
+            txn_texts = [_ocr_one(b) for b in req.transaction if b and b.strip()]
+            return {
+                "header": header_text,
+                "transaction": txn_texts,
+                "total_output_token": total_tokens,
+            }
+
+        answer = await anyio.to_thread.run_sync(_process)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return OCRResponse(id=req.id, answer=answer)
 
 
 @app.get("/health")
