@@ -30,6 +30,7 @@ class PlanSubtask(TypedDict, total=False):
     depends_on: list[str]
     required: bool
     expected_output: str
+    retrieval_hints: dict[str, Any]
 
 
 class Plan(TypedDict, total=False):
@@ -53,6 +54,7 @@ class SpecialistResult(TypedDict, total=False):
     status: str
     queries: list[str]
     search_queries: list[str]
+    attempts: list[dict[str, Any]]
     vector_results: list[dict[str, Any]]
     keyword_results: list[dict[str, Any]]
     rows: list[dict[str, Any]]
