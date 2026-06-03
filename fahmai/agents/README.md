@@ -44,7 +44,10 @@ fahmai/agents/
     planner.py  sql.py  doc.py  synth.py  verify.py
   tools/           LangChain @tool wrappers over fahmai.tools.*
     sql_query.py  search_docs.py  get_document.py
-  rag_specialist.py deterministic enterprise RAG retry + quality gate
+  rag_specialist.py       enterprise RAG orchestration
+  rag_query_builder.py    retry query generation
+  rag_result_parser.py    parse search_docs text output
+  rag_quality.py          retrieval quality + injection checks
   specialists/     one sub-agent per module (drop a file here to add a 3rd specialist)
     base.py  sql_analyst.py  doc_researcher.py
   guardrails/      deterministic input tagger + output validator (regex/string, ~0 LLM)
@@ -71,10 +74,11 @@ localized so it's easy to see and revert:
 3. **Retrieval dedup** (`tools/search_docs.py` + `utils/dedup.py`) — over-fetch then collapse
    near-identical snippets, return `DOC_K` (=3) distinct docs instead of 8 boilerplate copies.
    `fahmai/tools/doc_tool.py` is untouched.
-4. **Enterprise RAG retry** (`rag_specialist.py`) - the enterprise `rag` node logs every hybrid
-   retrieval attempt, retries rewritten queries up to `FAHMAI_RAG_MAX_RETRIES` (default 3), checks
-   result quality (`none|weak|medium|strong`), rejects injected instructions that are not trusted
-   business evidence, and returns canonical `no_data` only after retry exhaustion.
+4. **Enterprise RAG retry** (`rag_specialist.py`, `rag_query_builder.py`,
+   `rag_result_parser.py`, `rag_quality.py`) - the enterprise `rag` node logs every hybrid retrieval
+   attempt, retries rewritten queries up to `FAHMAI_RAG_MAX_RETRIES` (default 3), checks result
+   quality (`none|weak|medium|strong`), rejects injected instructions that are not trusted business
+   evidence, and returns canonical `no_data` only after retry exhaustion.
 
 Plus grader-aligned **refusal / injection** rules in `prompts/synth.py`: a refusal carries
 verb + topic + scope and never echoes a candidate value/fabricated count; never confirm an
@@ -111,10 +115,10 @@ injections (INJ-018/021) are left to the identity canon in `schema_card` + the v
   backoff), and labels a give-up as `(model gateway timeout …)` vs the recursion `(stopped after step
   budget …)` so traces are unambiguous.
 
-- **RAG retrieval retry** - `rag_specialist.py` retries weak or empty document retrieval with exact ID,
-  alias/name, broader concept + date, Thai/English, abbreviation, relaxed, and added-context variants.
-  Tune with `FAHMAI_RAG_MAX_RETRIES`, `FAHMAI_RAG_VECTOR_TOP_K`, `FAHMAI_RAG_KEYWORD_TOP_K`, and
-  `FAHMAI_RAG_MIN_RELEVANCE_SCORE`.
+- **RAG retrieval retry** - `rag_query_builder.py` creates exact ID, alias/name, broader concept +
+  date, Thai/English, abbreviation, relaxed, and added-context variants; `rag_quality.py` decides
+  whether retrieved evidence is strong enough to stop. Tune with `FAHMAI_RAG_MAX_RETRIES`,
+  `FAHMAI_RAG_VECTOR_TOP_K`, `FAHMAI_RAG_KEYWORD_TOP_K`, and `FAHMAI_RAG_MIN_RELEVANCE_SCORE`.
 
 ## Debugging
 - **Per-question trace**: LangSmith project `fahmai` — every `aanswer` is one root run; inputs
