@@ -10,6 +10,7 @@ import re
 
 from sqlalchemy import text
 
+from fahmai.db import get_engine
 from fahmai.tools import ENGINE
 
 # The real guard is `SET TRANSACTION READ ONLY` (Postgres rejects any write at execute).
@@ -72,7 +73,8 @@ def sql_query(sql: str) -> str:
     if _WRITE.search(_code_only(s)):
         return "SQL ERROR: write/DDL statement detected (read-only)."
     try:
-        with ENGINE.connect() as c:
+        engine = ENGINE or get_engine()
+        with engine.connect() as c:
             with c.begin():
                 c.execute(text("SET TRANSACTION READ ONLY"))
                 c.execute(text(f"SET LOCAL statement_timeout = {TIMEOUT_MS}"))

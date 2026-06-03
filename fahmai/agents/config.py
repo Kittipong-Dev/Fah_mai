@@ -11,7 +11,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - convenience for bare stdlib test runs
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 ROOT = Path(__file__).resolve().parents[2]   # fahmai/agents/config.py -> repo root
 load_dotenv(ROOT / ".env")
@@ -32,6 +36,9 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 CONCURRENCY = int(os.getenv("FAHMAI_CONCURRENCY", "3"))      # questions in flight
 PER_Q_TIMEOUT = int(os.getenv("FAHMAI_Q_TIMEOUT", "600"))   # seconds per question
 DOC_K = int(os.getenv("FAHMAI_DOC_K", "3"))                 # search results kept after dedup (was 8)
+ENTERPRISE_TOP_K = int(os.getenv("FAHMAI_ENTERPRISE_TOP_K", str(DOC_K)))
+ENTERPRISE_VECTOR_THRESHOLD = float(os.getenv("FAHMAI_ENTERPRISE_VECTOR_THRESHOLD", "0.72"))
+ENTERPRISE_KEYWORD_THRESHOLD = float(os.getenv("FAHMAI_ENTERPRISE_KEYWORD_THRESHOLD", "0.80"))
 SQL_RECURSION = 18      # sql specialist step budget (multi-step queries)
 DOC_RECURSION = 8       # doc specialist step budget (anti-loop)
 TEAM_RECURSION = 60     # whole-graph recursion limit
@@ -46,6 +53,7 @@ RETRY_ON_TIMEOUT = int(os.getenv("FAHMAI_RETRY_ON_TIMEOUT", "2"))
 
 # --- data paths ---
 DATA = ROOT / "data"
+QUERY_LOG_PATH = Path(os.getenv("FAHMAI_QUERY_LOG_PATH", str(DATA / "query_logs.jsonl")))
 QUESTIONS_CSV = DATA / "questions.csv"
 GROUND_TRUTH_CSV = DATA / "ground_truth.csv"
 SUBMISSION_CSV = ROOT / "submission.csv"

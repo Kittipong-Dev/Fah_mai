@@ -9,6 +9,7 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from fahmai.embed import embed_batch
+from fahmai.db import get_engine
 from fahmai.tools import ENGINE
 
 SNIPPET = 280
@@ -45,7 +46,8 @@ def search_docs(query: str, channel: str | None = None, topic: str | None = None
         limit :k
     """
     try:
-        with ENGINE.connect() as c:
+        engine = ENGINE or get_engine()
+        with engine.connect() as c:
             rows = c.execute(text(sql), params).fetchall()
     except Exception as e:  # noqa: BLE001
         return f"SEARCH ERROR: {str(e).splitlines()[0]}"
@@ -60,7 +62,8 @@ def search_docs(query: str, channel: str | None = None, topic: str | None = None
 
 def get_document(doc_id: str) -> str:
     """Return full content + metadata for one doc_id (for phrase/amount extraction)."""
-    with ENGINE.connect() as c:
+    engine = ENGINE or get_engine()
+    with engine.connect() as c:
         r = c.execute(text("""select doc_id, channel, doc_date, topic, participants, path, content
                               from doc_corpus where doc_id = :id"""), {"id": doc_id}).fetchone()
     if not r:

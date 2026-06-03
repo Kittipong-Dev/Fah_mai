@@ -13,6 +13,18 @@ Layout:
 """
 from fahmai.agents import config  # noqa: F401  (side effect: load .env + enable LangSmith FIRST)
 from fahmai.agents.data import QMAP, load_ground_truth, load_questions
-from fahmai.agents.graph import aanswer, answer, build_team
+try:
+    from fahmai.agents.enterprise_graph import aanswer, answer, build_team
+except ModuleNotFoundError as _import_error:  # pragma: no cover - bare helper imports without deps
+    _GRAPH_IMPORT_ERROR = _import_error
+
+    def build_team():
+        raise _GRAPH_IMPORT_ERROR
+
+    async def aanswer(_question: str) -> str:
+        raise _GRAPH_IMPORT_ERROR
+
+    def answer(_question: str) -> str:
+        raise _GRAPH_IMPORT_ERROR
 
 __all__ = ["aanswer", "answer", "build_team", "QMAP", "load_questions", "load_ground_truth"]

@@ -15,7 +15,11 @@ import os
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - convenience for bare stdlib test runs
+    def load_dotenv(*_args, **_kwargs):
+        return False
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 

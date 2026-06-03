@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import os
-
-from langchain_openai import ChatOpenAI
+from typing import Any
 
 from fahmai.agents.config import MODEL, OPENROUTER_BASE_URL
 
 
-def make_llm(temperature: float = 0.0, model: str | None = None) -> ChatOpenAI:
+def make_llm(temperature: float = 0.0, model: str | None = None) -> Any:
     """A ChatOpenAI pointed at OpenRouter. `max_retries` rides out transient 5xx (e.g. 504)."""
+    from langchain_openai import ChatOpenAI
+
     return ChatOpenAI(
         model=model or MODEL,
         base_url=OPENROUTER_BASE_URL,

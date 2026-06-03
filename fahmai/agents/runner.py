@@ -19,7 +19,7 @@ import pandas as pd
 
 from fahmai.agents.config import CONCURRENCY, PER_Q_TIMEOUT, SUBMISSION_CSV
 from fahmai.agents.data import QMAP
-from fahmai.agents.graph import aanswer, answer
+from fahmai.agents.enterprise_graph import aanswer, answer
 
 
 def _read_results() -> dict[str, str]:
