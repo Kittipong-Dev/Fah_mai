@@ -90,7 +90,11 @@ def cli() -> int:
     ps = sub.add_parser("submit", help="resumable batch -> submission.csv")
     ps.add_argument("--limit", type=int, default=None)
 
-    sub.add_parser("eval", help="regression compare on previously-failed questions")
+    pe = sub.add_parser("eval", help="heuristic accuracy check for current enterprise agent")
+    pe.add_argument("--id", action="append", dest="ids", help="Question id; repeat or comma-separate")
+    pe.add_argument("--limit", type=int, default=None)
+    pe.add_argument("--all", action="store_true", dest="all_questions")
+    pe.add_argument("--out", default=None)
 
     args = p.parse_args()
     if args.cmd == "answer":
@@ -100,7 +104,7 @@ def cli() -> int:
         return asyncio.run(run_submission(limit=args.limit))
     if args.cmd == "eval":
         from fahmai.agents.evaluate import main as eval_main
-        return eval_main()
+        return eval_main(ids=args.ids, limit=args.limit, all_questions=args.all_questions, out=args.out)
     return 1
 
 

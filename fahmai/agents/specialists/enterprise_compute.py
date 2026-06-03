@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fahmai.agents.enterprise_state import EnterpriseState, SpecialistResult
-from fahmai.agents.prompts.enterprise import COMPUTE_SYS
+from fahmai.agents.prompts.enterprise import FINANCE_SPECIALIST_SYS
 from fahmai.tools.compute_tool import compute_batch
 
 JsonLLM = Callable[[str, str], dict[str, Any]]
@@ -50,7 +50,7 @@ def run(
     if not subtasks:
         return {}
     payload = llm_json(
-        COMPUTE_SYS,
+        FINANCE_SPECIALIST_SYS,
         str(
             {
                 "question": state.get("safe_underlying_question"),

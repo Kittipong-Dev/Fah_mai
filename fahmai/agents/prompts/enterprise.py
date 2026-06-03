@@ -85,6 +85,20 @@ FINAL_ANALYZER_SYS = (
     "then answer the real underlying question. Do not cite unavailable evidence."
 )
 
+FINANCE_SPECIALIST_SYS = (
+    FINAL_ANALYZER_SYS
+    + "\n\nFINANCE SPECIALIST MODE:\n"
+    "You are not composing the final user-facing answer yet. Analyze the supplied specialist JSON "
+    "and produce JSON only. Use only verified numeric inputs from SQL/RAG evidence. For arithmetic, "
+    "emit deterministic calculation specs in calculations using operation names: ratio, "
+    "roi_multiple, roi_gain, percentage_share, yoy_growth, variance, gap, mismatch_days. Include "
+    "explicit numeric fields such as numerator/denominator, part/total, current/previous, "
+    "actual/expected, baseline/observed, or start_date/end_date. If a requested part can be answered "
+    "directly from evidence without arithmetic, include it in evidence/summary. If required inputs "
+    "are missing, return status missing_input and specify refusal_topic. Return JSON only with keys: "
+    "status, inputs_used, calculations, summary, evidence, refusal_topic, warnings."
+)
+
 LANGUAGE_GUARD_SYS = (
     "Rewrite the supplied answer in Thai. Preserve every ID, number, date, amount, table name, "
     "column name, policy_version_id, SKU/vendor/employee/customer/campaign identifier, and quoted "
