@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import fahmai.agents.enterprise_nodes as nodes
+from fahmai.agents.data import load_ground_truth
 from fahmai.agents.enterprise_nodes import (
     aggregate_specialist_outputs_node,
     evidence_validator_node,
@@ -42,6 +45,19 @@ class EnterprisePipelineTests(unittest.TestCase):
         normalized, meta = normalize_years("\u0e22\u0e2d\u0e14\u0e02\u0e32\u0e22\u0e1b\u0e35 2568")
         self.assertIn("2025", normalized)
         self.assertEqual(meta["years"], [{"be": 2568, "ce": 2025}])
+
+    def test_load_ground_truth_supports_opus_schema(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gt.csv"
+            path.write_text(
+                "id,question,answer,explain\n"
+                "L3-Q-INJ-001,q,a,why\n",
+                encoding="utf-8",
+            )
+            gt = load_ground_truth(path)
+        self.assertEqual(gt["L3-Q-INJ-001"]["answer"], "a")
+        self.assertEqual(gt["L3-Q-INJ-001"]["source"], "why")
+        self.assertEqual(gt["L3-Q-INJ-001"]["confidence"], "defend")
 
     def test_rule_normalizer_extracts_safe_aliases_and_hints(self):
         out = normalize_question_rule_based(

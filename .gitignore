@@ -8,6 +8,7 @@ wheels/
 # ignore the bulky data bundle, but keep the question set + reference answers
 data/*
 !data/ground_truth.csv
+!data/ground_truth_opus.csv
 !data/questions.csv
 # Large input bundle (~4GB OCR zip) — never commit
 ocr_data/

@@ -95,6 +95,7 @@ def cli() -> int:
     pe.add_argument("--limit", type=int, default=None)
     pe.add_argument("--all", action="store_true", dest="all_questions")
     pe.add_argument("--out", default=None)
+    pe.add_argument("--gt", default=None, help="Ground-truth CSV path; supports repo or Opus schema")
 
     args = p.parse_args()
     if args.cmd == "answer":
@@ -104,7 +105,7 @@ def cli() -> int:
         return asyncio.run(run_submission(limit=args.limit))
     if args.cmd == "eval":
         from fahmai.agents.evaluate import main as eval_main
-        return eval_main(ids=args.ids, limit=args.limit, all_questions=args.all_questions, out=args.out)
+        return eval_main(ids=args.ids, limit=args.limit, all_questions=args.all_questions, out=args.out, gt=args.gt)
     return 1
 
 

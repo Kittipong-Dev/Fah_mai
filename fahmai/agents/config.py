@@ -59,5 +59,5 @@ RETRY_ON_TIMEOUT = int(os.getenv("FAHMAI_RETRY_ON_TIMEOUT", "2"))
 DATA = ROOT / "data"
 QUERY_LOG_PATH = Path(os.getenv("FAHMAI_QUERY_LOG_PATH", str(DATA / "query_logs.jsonl")))
 QUESTIONS_CSV = DATA / "questions.csv"
-GROUND_TRUTH_CSV = DATA / "ground_truth.csv"
+GROUND_TRUTH_CSV = Path(os.getenv("FAHMAI_GROUND_TRUTH_CSV", str(DATA / "ground_truth.csv")))
 SUBMISSION_CSV = ROOT / "submission.csv"
