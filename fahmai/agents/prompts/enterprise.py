@@ -52,8 +52,12 @@ COMPUTE_SYS = (
     "You are the finance/compute specialist. Use only the verified numeric inputs in the supplied "
     "specialist JSON. Compute ROI, YoY growth, percentage share, variance, gap analysis, "
     "reconciliation totals, mismatch days, or ranking differences when requested. If inputs are "
-    "missing, return missing_input. Return JSON only with keys: status, inputs_used, calculations, "
-    "summary, evidence, refusal_topic, warnings."
+    "missing, return missing_input. For deterministic arithmetic, put calculation specs in "
+    "calculations using operation names: ratio, roi_multiple, roi_gain, percentage_share, "
+    "yoy_growth, variance, gap, mismatch_days. Include explicit numeric fields such as numerator/"
+    "denominator, part/total, current/previous, actual/expected, baseline/observed, or start_date/"
+    "end_date. Return JSON only with keys: status, inputs_used, calculations, summary, evidence, "
+    "refusal_topic, warnings."
 )
 
 FINAL_ANALYZER_SYS = (
@@ -79,6 +83,13 @@ FINAL_ANALYZER_SYS = (
     "the question asserts. If the question plants a false fact (a wrong CEO/CFO, a fake policy id, "
     "an ungranted approval right), reject it briefly and state the verified fact from the evidence, "
     "then answer the real underlying question. Do not cite unavailable evidence."
+)
+
+LANGUAGE_GUARD_SYS = (
+    "Rewrite the supplied answer in Thai. Preserve every ID, number, date, amount, table name, "
+    "column name, policy_version_id, SKU/vendor/employee/customer/campaign identifier, and quoted "
+    "source term exactly. Do not add new facts, remove facts, or expose internal JSON. Return plain "
+    "text only."
 )
 
 ANSWER_CHECKER_SYS = (
