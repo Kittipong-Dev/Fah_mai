@@ -6,11 +6,15 @@ Agents are built lazily (no LLM calls at import) and cached.
 """
 from __future__ import annotations
 
-from fahmai.agents.specialists import doc_researcher, sql_analyst
+from fahmai.agents.specialists import doc_researcher, rag_researcher, sql_analyst
 from fahmai.agents.specialists.base import run_specialist_async
 
 # kind -> module (each module exposes build(), KIND, RECURSION)
-SPECIALISTS = {sql_analyst.KIND: sql_analyst, doc_researcher.KIND: doc_researcher}
+SPECIALISTS = {
+    sql_analyst.KIND: sql_analyst,
+    doc_researcher.KIND: doc_researcher,
+    rag_researcher.KIND: rag_researcher,
+}
 
 _BUILT: dict = {}
 

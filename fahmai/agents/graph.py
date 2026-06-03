@@ -6,7 +6,9 @@
       -> plan         decompose into subtasks; flag injection
       -> workers      one Send() per subtask, run in parallel (sql / doc specialist; retries 504)
       -> coverage     did the raw findings cover every subtask? hard-failed (504/empty) -> replan
-                      ONLY those subtasks (deterministic re-dispatch, bounded); else -> synth
+                      ONLY those subtasks (deterministic re-dispatch, bounded); else -> sql_verify
+      -> sql_verify   independently re-check superlative/aggregate SQL claims (MED/HARD/XHARD)
+      -> compute      deterministic Python arithmetic over findings (HARD/XHARD; no LLM math)
       -> synth        merge findings -> Thai answer (grounded, self-checked, injection-resistant)
       -> guard        deterministic output safety (must-not / refusal-shape / forced-string); repair <=1
 
@@ -25,16 +27,32 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from fahmai.agents import specialists
-from fahmai.agents.config import GUARDRAIL_REPAIR, REPLAN_BUDGET, TEAM_RECURSION
+from fahmai.agents.config import (
+    COMPUTE_NODE,
+    GUARDRAIL_REPAIR,
+    REPLAN_BUDGET,
+    SQL_VERIFY,
+    TEAM_RECURSION,
+)
 from fahmai.agents.guardrails import InputFlags, check_output, force_decline, scan_input, scrub
 from fahmai.agents.llm import make_llm
-from fahmai.agents.prompts import PLANNER_SYS, SYNTH_SYS
+from fahmai.agents.prompts import CLASSIFY_SYS, COMPUTE_SYS, PLANNER_SYS, SQL_VERIFY_SYS, SYNTH_SYS
+from fahmai.agents.specialists.base import build_react
+from fahmai.agents.tools import sql_query_tool
 from fahmai.utils import parse_json
+from fahmai.utils.safe_eval import safe_eval
+
+# superlative / aggregate claims are the error-prone ones worth an independent SQL re-check
+_SUPERLATIVE = re.compile(
+    r"สูงสุด|ต่ำสุด|มากที่สุด|น้อยที่สุด|highest|lowest|most|least|max|min|largest|smallest|top\s*\d",
+    re.IGNORECASE,
+)
 
 # a worker finding that signals the data was NOT fetched (transient/infra) -> worth re-dispatching.
 # NOTE: "ไม่พบ" / "out of scope" are NOT here — those mean genuine absence / doc-deferral (don't replan).
 _HARD_FAIL = re.compile(r"\(error|\(timeout|\(stopped after step budget|\(model gateway timeout|"
-                        r"\(specialist error|\(no answer")
+                        r"\(specialist error|\(no answer|"
+                        r"sorry, need more steps|need more steps to process|recursion")
 
 
 def is_hard_fail(finding: str) -> bool:
@@ -57,6 +75,8 @@ def dedupe_findings(findings: list) -> dict:
 
 class State(TypedDict, total=False):
     question: str
+    question_type: str      # "EASY" | "MED" | "HARD" | "XHARD" (set by classify)
+    exec_mode: str          # "parallel" | "sequential" (set by classify)
     is_injection: bool
     subtasks: list
     findings: Annotated[list, operator.add]   # reducer: parallel workers append concurrently
@@ -75,22 +95,54 @@ def n_input_guard(state: State):
     return {"flags": flags.as_dict(), "guard_attempts": 0, "replan_attempts": 0}
 
 
+def n_classify(state: State):
+    """Classify question difficulty and execution mode (parallel vs sequential)."""
+    out = make_llm().invoke([("system", CLASSIFY_SYS), ("human", state["question"])]).content
+    c = parse_json(out) or {}
+    return {
+        "question_type": c.get("question_type", "HARD"),
+        "exec_mode": c.get("exec_mode", "parallel"),
+    }
+
+
 def n_plan(state: State):
     # replan path: re-dispatch ONLY the failed subtasks (deterministic — hard failures are transient
     # 504/infra, so re-running the same subtask is the right fix; no LLM, ids preserved).
     if state.get("failed_subtasks"):
         return {"subtasks": state["failed_subtasks"], "failed_subtasks": []}
-    out = make_llm().invoke([("system", PLANNER_SYS), ("human", state["question"])]).content
+    if state.get("exec_mode") == "sequential":
+        mode_hint = (
+            "\n[EXECUTION MODE: sequential — subtasks will run ONE AT A TIME in order. "
+            "Each subtask will receive the findings of all prior subtasks as context before "
+            "it runs. It is therefore OK for subtask N to say 'use the id/value/result found "
+            "in subtask N-1'. Do NOT try to make subtasks self-contained when the answer to "
+            "one genuinely depends on the other's output.]"
+        )
+    else:
+        mode_hint = (
+            "\n[EXECUTION MODE: parallel — all subtasks run simultaneously and cannot see "
+            "each other. Every subtask MUST be fully self-contained.]"
+        )
+    out = make_llm().invoke([
+        ("system", PLANNER_SYS + mode_hint),
+        ("human", state["question"]),
+    ]).content
     p = parse_json(out) or {}
     subs = p.get("subtasks") or [{"id": 1, "specialist": "sql", "subquestion": state["question"]}]
     inj = bool(p.get("is_injection", False)) or bool(state.get("flags", {}).get("is_injection"))
     return {"subtasks": subs, "is_injection": inj}
 
 
+def _specialist_kind(st: dict) -> str:
+    """Resolve specialist kind: sql | doc | rag (default sql for unknown)."""
+    s = (st.get("specialist") or "").lower()
+    return s if s in ("sql", "doc", "rag") else "sql"
+
+
 async def n_worker(payload: dict):
     """One subtask per Send -> runs in parallel; appends to `findings` via the reducer."""
     st = payload["subtask"]
-    kind = "doc" if st.get("specialist") == "doc" else "sql"
+    kind = _specialist_kind(st)
     try:
         res = await specialists.run(kind, st["subquestion"])
     except Exception as e:  # noqa: BLE001
@@ -99,7 +151,41 @@ async def n_worker(payload: dict):
                           "subquestion": st.get("subquestion", ""), "finding": res}]}
 
 
+async def n_sequential_worker(state: State):
+    """Run subtasks one at a time; each receives prior findings as context.
+
+    Used for HARD/XHARD questions where later subtasks need the actual value/id
+    returned by an earlier subtask before they can form their own query.
+    """
+    findings = list(state.get("findings") or [])
+    for st in (state.get("subtasks") or []):
+        kind = _specialist_kind(st)
+        ctx = ""
+        if findings:
+            ctx = (
+                "\n\n[Prior subtask findings — use these concrete values in your query:\n"
+                + "\n".join(
+                    f"Subtask {f['id']} ({f['specialist']}): {str(f['finding'])[:600]}"
+                    for f in findings
+                )
+                + "]"
+            )
+        try:
+            res = await specialists.run(kind, st["subquestion"] + ctx)
+        except Exception as e:  # noqa: BLE001
+            res = f"(specialist error: {e})"
+        findings.append({
+            "id": st.get("id"),
+            "specialist": kind,
+            "subquestion": st.get("subquestion", ""),
+            "finding": res,
+        })
+    return {"findings": findings}
+
+
 def dispatch(state: State):
+    if state.get("exec_mode") == "sequential":
+        return "sequential_worker"
     return [Send("worker", {"subtask": st}) for st in state["subtasks"]]
 
 
@@ -116,7 +202,86 @@ def n_coverage(state: State):
 
 
 def route_coverage(state: State):
-    return "plan" if state.get("failed_subtasks") else "synth"
+    return "plan" if state.get("failed_subtasks") else "sql_verify"
+
+
+_VERIFIER = None
+
+
+def _get_verifier():
+    """Lazily build & cache the SQL-verifier ReAct agent (same tool as the sql analyst)."""
+    global _VERIFIER
+    if _VERIFIER is None:
+        _VERIFIER = build_react(SQL_VERIFY_SYS, [sql_query_tool])
+    return _VERIFIER
+
+
+async def n_sql_verify(state: State):
+    """Independently re-check superlative/aggregate SQL findings (MED/HARD/XHARD).
+
+    Re-runs each at-risk sql finding through a verifier that uses a different query shape
+    (top-N, alternate grouping). The confirmed/corrected finding is appended with the same id,
+    so dedupe_findings prefers it over the original.
+    """
+    if not SQL_VERIFY or state.get("question_type") not in ("MED", "HARD", "XHARD"):
+        return {}
+    best = dedupe_findings(state.get("findings") or [])
+    to_check = [
+        f for f in best.values()
+        if f.get("specialist") == "sql"
+        and not is_hard_fail(f.get("finding"))
+        and _SUPERLATIVE.search(str(f.get("subquestion", "")) + " " + str(f.get("finding", "")))
+    ]
+    if not to_check:
+        return {}
+
+    async def _verify(f: dict):
+        prompt = (
+            f"SUB-QUESTION:\n{f.get('subquestion','')}\n\n"
+            f"PREVIOUS FINDING TO VERIFY:\n{str(f.get('finding',''))[:800]}"
+        )
+        try:
+            res = await specialists.run_specialist_async(_get_verifier(), prompt, recursion=20)
+        except Exception as e:  # noqa: BLE001
+            res = f"(verify error: {e})"
+        if is_hard_fail(res):
+            return None  # keep original; don't overwrite with a failed/recursion-capped verify
+        return {"id": f.get("id"), "specialist": "sql",
+                "subquestion": f.get("subquestion", ""), "finding": res}
+
+    verified = await asyncio.gather(*[_verify(f) for f in to_check])
+    new = [v for v in verified if v]
+    return {"findings": new} if new else {}
+
+
+def n_compute(state: State):
+    """Deterministic arithmetic over findings (HARD/XHARD): the LLM names the formula + operands,
+    Python computes the value. Removes LLM arithmetic errors on ratios/baselines/ROI/percentages."""
+    if not COMPUTE_NODE or state.get("question_type") not in ("HARD", "XHARD"):
+        return {}
+    best = dedupe_findings(state.get("findings") or [])
+    fs = sorted(best.values(), key=lambda f: f.get("id") or 0)
+    ftxt = "\n\n".join(
+        f"[subtask {f['id']} | {f['specialist']}] {f['subquestion']}\nFINDING: {f['finding']}"
+        for f in fs)
+    out = make_llm(0.0).invoke([("system", COMPUTE_SYS),
+        ("human", f"QUESTION:\n{state['question']}\n\nFINDINGS:\n{ftxt}")]).content
+    spec = parse_json(out) or {}
+    lines = []
+    for c in spec.get("computations") or []:
+        try:
+            val = safe_eval(str(c.get("expression", "")), c.get("operands") or {})
+        except Exception:  # noqa: BLE001 — bad formula/operand -> skip, don't fabricate
+            continue
+        val_str = f"{val:,.2f}".rstrip("0").rstrip(".") if val == val else str(val)
+        lines.append(f"{c.get('name','metric')} = {val_str}  (= {c.get('expression','')})")
+    if not lines:
+        return {}
+    return {"findings": [{
+        "id": 999, "specialist": "compute",
+        "subquestion": "derived calculations (deterministically computed)",
+        "finding": "\n".join(lines),
+    }]}
 
 
 def _guard_note(flags: dict) -> str:
@@ -182,16 +347,24 @@ def build_team():
     specialists.build_specialists()
     g = StateGraph(State)
     g.add_node("input_guard", n_input_guard)
+    g.add_node("classify", n_classify)
     g.add_node("plan", n_plan)
     g.add_node("worker", n_worker)
+    g.add_node("sequential_worker", n_sequential_worker)
     g.add_node("coverage", n_coverage)
+    g.add_node("sql_verify", n_sql_verify)
+    g.add_node("compute", n_compute)
     g.add_node("synth", n_synth)
     g.add_node("guard", n_guard)
     g.add_edge(START, "input_guard")
-    g.add_edge("input_guard", "plan")
-    g.add_conditional_edges("plan", dispatch, ["worker"])    # parallel fan-out
-    g.add_edge("worker", "coverage")                         # coverage waits for all workers
-    g.add_conditional_edges("coverage", route_coverage, {"plan": "plan", "synth": "synth"})
+    g.add_edge("input_guard", "classify")
+    g.add_edge("classify", "plan")
+    g.add_conditional_edges("plan", dispatch, ["worker", "sequential_worker"])
+    g.add_edge("worker", "coverage")
+    g.add_edge("sequential_worker", "coverage")
+    g.add_conditional_edges("coverage", route_coverage, {"plan": "plan", "sql_verify": "sql_verify"})
+    g.add_edge("sql_verify", "compute")
+    g.add_edge("compute", "synth")
     g.add_edge("synth", "guard")
     g.add_conditional_edges("guard", route_guard, {END: END, "synth": "synth"})
     return g.compile()

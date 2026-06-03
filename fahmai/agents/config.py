@@ -44,6 +44,11 @@ GUARDRAIL_REPAIR = os.getenv("FAHMAI_GUARDRAIL_REPAIR", "on").lower() not in ("0
 # retry a specialist this many extra times on a transient gateway timeout (504/aborted)
 RETRY_ON_TIMEOUT = int(os.getenv("FAHMAI_RETRY_ON_TIMEOUT", "2"))
 
+# sql self-verify: independently re-check superlative/aggregate SQL claims (MED/HARD/XHARD).
+SQL_VERIFY = os.getenv("FAHMAI_SQL_VERIFY", "on").lower() not in ("0", "off", "false")
+# compute node: deterministic Python arithmetic over findings (HARD/XHARD).
+COMPUTE_NODE = os.getenv("FAHMAI_COMPUTE", "on").lower() not in ("0", "off", "false")
+
 # --- data paths ---
 DATA = ROOT / "data"
 QUESTIONS_CSV = DATA / "questions.csv"
