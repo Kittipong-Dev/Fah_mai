@@ -21,7 +21,7 @@ COMPUTE_SYS = (
     "- Only emit a computation when ALL operands are present as concrete numbers in the findings. "
     "If a needed number is missing, SKIP that metric (do not guess).\n"
     "- Do NOT restate numbers that are already directly given in a finding — only NEW derived values.\n"
-    "- Operand values must be plain numbers (e.g. 53603500, not '53,603,500 บาท').\n"
+    "- Operand values must be plain numbers (e.g. 1500000, not '1,500,000 บาท').\n"
     "- If the question needs no derived arithmetic, return an empty list.\n"
     'Respond ONLY with JSON: {"computations":[{"name":"...","expression":"...",'
     '"operands":{"a":1,"b":2}}]}'
