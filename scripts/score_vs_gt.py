@@ -110,7 +110,13 @@ def main():
         else:  # exact
             frac = frac_present(toks, agent)
             if frac is None:
-                label = "REVIEW"
+                # Word-only canonical (no id/date/number tokens, e.g. "platinum"):
+                # fall back to a direct substring check of the canonical phrase.
+                canon_word = canonical.strip().lower()
+                if canon_word and canon_word in agent.lower():
+                    label, frac = "MATCH", 1.0
+                else:
+                    label = "REVIEW"
             else:
                 label = "MATCH" if frac >= 0.8 else ("PARTIAL" if frac >= 0.4 else "MISS")
 
