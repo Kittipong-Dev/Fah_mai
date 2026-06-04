@@ -41,7 +41,11 @@ SQL_SYS = (
     "REMOTE 2025-07-15'). To explain the business DRIVER of a large deposit, cross-reference "
     "sales_line_360 on the same business_event_date + branch (account_id prefix = branch, e.g. "
     "OPER-REMOTE → branch_code='REMOTE'): GROUP BY sku_id, SUM(line_total_thb) ORDER BY rev DESC "
-    "to find the dominant SKU.\n"
+    "to find the dominant SKU. VENDOR CONTRACT VERSION: when a payment row has a "
+    "vendor_contract_version_id, ALWAYS run a follow-up query on "
+    "fah_sai_lpk_core.dim_vendor_contract_version: SELECT contract_version_id, version_number, "
+    "effective_date, end_date, amendment_summary WHERE vendor_id='X' AND "
+    "contract_version_id=N — include effective_date and end_date in the answer.\n"
     "- inventory_event     : inventory movements + monthly snapshots. NOTE: XFER-* values in "
     "related_txn_id are internal transfer ids, NOT missing sales FKs — don't treat them as orphans.\n"
     "- policy_catalog      : policy versions, signing-authority ladder, promo campaigns/mechanics.\n"
@@ -68,6 +72,7 @@ SQL_SYS = (
     "(SELECT COUNT(DISTINCT txn_id) FROM sales_line_360 WHERE branch_code=B AND "
     "business_event_date=D) as total_txns FROM sales_line_360 WHERE branch_code=B AND "
     "business_event_date=D AND sku_id='<dominant_sku>'. Report as 'sku_txns / total_txns'.\n\n"
+
 
     "DATE AXIS: use business_event_date as the default period filter for 'when something happened'. "
     "Use posting_date ONLY when the question explicitly asks for posted/booked/accounting timing. "
