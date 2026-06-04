@@ -57,10 +57,12 @@ SQL_SYS = (
     "it asks for a NAME, also return the human-readable name (the surfaces already carry "
     "branch_name_en, vendor names, etc.); give BOTH id and name.\n\n"
 
-    "DOMINANT SKU COUNT: when asked which SKU dominated transactions on a date, return BOTH the "
-    "total transaction count for that day AND the count specifically for the dominant SKU. "
-    "Use: COUNT(DISTINCT CASE WHEN sku_id=X THEN txn_id END) as sku_txns, "
-    "COUNT(DISTINCT txn_id) as total_txns.\n\n"
+    "DOMINANT SKU COUNT: when asked which SKU dominated transactions on a date, first find the top "
+    "SKU with GROUP BY sku_id ORDER BY COUNT DESC, then in a SECOND query return BOTH the "
+    "SKU-specific count AND the total: SELECT COUNT(DISTINCT txn_id) as sku_txns, "
+    "(SELECT COUNT(DISTINCT txn_id) FROM sales_line_360 WHERE branch_code=B AND "
+    "business_event_date=D) as total_txns FROM sales_line_360 WHERE branch_code=B AND "
+    "business_event_date=D AND sku_id='<dominant_sku>'. Report as 'sku_txns / total_txns'.\n\n"
 
     "DATE AXIS: use business_event_date as the default period filter for 'when something happened'. "
     "Use posting_date ONLY when the question explicitly asks for posted/booked/accounting timing. "
