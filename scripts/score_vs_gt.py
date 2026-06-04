@@ -38,7 +38,14 @@ def key_tokens(text):
     for d in DATE_RE.findall(text):
         toks.add(("date", d))
     masked = ID_RE.sub(" ", DATE_RE.sub(" ", text))
-    nums = [norm_num(n) for n in NUM_RE.findall(masked)]
+    nums = []
+    for n in NUM_RE.findall(masked):
+        # Comma tuple like "(109,...,110)" collapses to an absurd >13-digit number;
+        # split it back into its comma segments rather than one giant token.
+        if "," in n and len(n.replace(",", "").replace(".", "")) > 13:
+            nums.extend(norm_num(seg) for seg in n.split(",") if seg)
+        else:
+            nums.append(norm_num(n))
     big = [n for n in nums if len(n.replace(".", "")) >= 2]
     use = big if big else nums  # short canonicals (e.g. "6 ราย") fall back to 1-digit nums
     for n in use:

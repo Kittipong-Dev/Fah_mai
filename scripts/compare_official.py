@@ -23,7 +23,16 @@ def key_tokens(text):
     for d in DATE_RE.findall(text):
         toks.add(("date", d))
     masked = ID_RE.sub(" ", DATE_RE.sub(" ", text))
-    nums = [norm(n) for n in NUM_RE.findall(masked)]
+    raw = NUM_RE.findall(masked)
+    nums = []
+    for n in raw:
+        # A comma tuple like "(109,109,...,110)" collapses to an absurd >13-digit
+        # number under thousands-sep removal — it's really a list of values, so
+        # split it back into its comma segments instead of one giant token.
+        if "," in n and len(n.replace(",", "").replace(".", "")) > 13:
+            nums.extend(norm(seg) for seg in n.split(",") if seg)
+        else:
+            nums.append(norm(n))
     big = [n for n in nums if len(n.replace(".", "")) >= 2]
     for n in (big if big else nums):
         toks.add(("num", n))
