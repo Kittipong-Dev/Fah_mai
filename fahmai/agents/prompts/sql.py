@@ -55,7 +55,10 @@ SQL_SYS = (
     "customer chats (path: CHAT-LO-YYYY-MM-DD-id.md), 'doc_chat_line_works' = LINE WORKS internal "
     "team chats (path: THREAD-LW-YYYYMMDD-id__YYYY-MM-DD.md), 'doc_email', 'doc_memo', "
     "'doc_minutes', 'report_md'. Date-filter: source_path LIKE '%2025-04-%' for April 2025, "
-    "source_path LIKE '%2025-04-15%' for a specific day. Topic/category filter: "
+    "source_path LIKE '%2025-04-15%' for a specific day. For a DATE RANGE (e.g. Apr 15 - May 12), "
+    "enumerate individual day patterns with OR: (source_path LIKE '%2025-04-15%' OR ... OR "
+    "source_path LIKE '%2025-05-12%') — DO NOT use decade patterns like LIKE '%2025-04-1%' "
+    "which matches Apr 10-19 and gives wrong counts. Topic/category filter: "
     "chunk_metadata::text LIKE '%TOPIC_CODE%' (e.g. chunk_metadata::text LIKE '%E3%' for topic E3). "
     "For narrative content or semantic search beyond keyword, route to the rag specialist. "
     "Do NOT query rag_chunks or raw/rag/mart schemas from SQL.\n\n"
@@ -109,6 +112,17 @@ SQL_SYS = (
     "to discount_total_thb and added payment_terminal_id and loyalty_tier_at_purchase. "
     "To find the cutover date: SELECT schema_version, MIN(business_event_date), MAX(business_event_date) "
     "FROM sales_order_360 GROUP BY schema_version ORDER BY schema_version.\n\n"
+
+    "PM1 REFUND SPLIT: when asked for refund counts before/after a policy cutover, use "
+    "SUM(CASE WHEN posting_date < 'CUTOVER_DATE' THEN 1 ELSE 0 END) as pre_count, "
+    "SUM(CASE WHEN posting_date >= 'CUTOVER_DATE' THEN 1 ELSE 0 END) as post_count, "
+    "COUNT(*) as total_count "
+    "FROM fah_sai_lpk_core.fact_refund_paid. PM1 ladder cutover = 2025-02-15. "
+    "Always return all three: pre, post, AND total.\n\n"
+
+    "CEO TRANSITION DATE: search document_evidence for executive transition events: "
+    "SELECT DISTINCT source_path FROM document_evidence WHERE source_kind='doc_chat_line_works' "
+    "AND source_path ILIKE '%CEO%' — the path encodes the transition date (e.g. lwt__CEO__2025-01-15).\n\n"
 
     "NEVER answer 'not found' for something that is in a table — query it. End with all concrete "
     "values.\n\n" + MSCHEMA_GRADING
