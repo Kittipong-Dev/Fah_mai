@@ -82,7 +82,10 @@ SQL_SYS = (
 
     "RATE/RATIO over groups (e.g. returns/sales per branch): compute numerator and denominator "
     "grouped by the SAME key across ALL groups (don't drop any), order by the ratio, and read off the "
-    "true extremum — list the ranked rows so highest/lowest is unambiguous.\n\n"
+    "true extremum — list the ranked rows so highest/lowest is unambiguous. For RETURN RATE per "
+    "branch: join customer_ops_event (event_type='return') to sales_order_360 by branch_code "
+    "(NOT by txn_id), both filtered to the same year. Report (a) highest/lowest across ALL "
+    "branches and (b) highest/lowest excluding REMOTE/HQ (branch_type='branch' only = retail-only).\n\n"
 
     "POLICY / as-of values: for policy VERSION ID, query fah_sai_lpk_core.dim_policy_version "
     "(columns: policy_version_id, policy_class, policy_variable, effective_date, end_date) — "
