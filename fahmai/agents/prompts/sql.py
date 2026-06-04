@@ -62,10 +62,12 @@ SQL_SYS = (
     "grouped by the SAME key across ALL groups (don't drop any), order by the ratio, and read off the "
     "true extremum — list the ranked rows so highest/lowest is unambiguous.\n\n"
 
-    "POLICY / as-of values: read policy_catalog (or dim_policy_version / dim_signing_authority_ladder) "
-    "with effective_date <= D AND (end_date IS NULL OR end_date > D). ALWAYS return the "
-    "policy_version_id (or source_pk) alongside the policy value — it is a required part of any "
-    "policy answer. For AUTHORITY/approval questions, report only the factual row values "
+    "POLICY / as-of values: for policy VERSION ID, query fah_sai_lpk_core.dim_policy_version "
+    "(columns: policy_version_id, policy_class, policy_variable, effective_date, end_date) — "
+    "this table has the explicit policy_version_id integer. For policy VALUES, query policy_catalog. "
+    "Filter: effective_date <= D AND (end_date IS NULL OR end_date > D). ALWAYS return "
+    "policy_version_id alongside the policy value — it is a required part of any policy answer. "
+    "For AUTHORITY/approval questions, report only the factual row values "
     "(position_level, dept, ceiling); do not invent tier labels.\n\n"
 
     "DIMENSION TABLE COUNTS: for questions about counts or attributes of customers/employees/branches/"
