@@ -124,6 +124,25 @@ SQL_SYS = (
     "SELECT DISTINCT source_path FROM document_evidence WHERE source_kind='doc_chat_line_works' "
     "AND source_path ILIKE '%CEO%' — the path encodes the transition date (e.g. lwt__CEO__2025-01-15).\n\n"
 
+    "SALES-DROP ROOT CAUSE (which branch caused a period-over-period sales drop): compare branch "
+    "txn counts across BOTH periods in one query and order by the drop — do NOT look for "
+    "exactly-zero branches (a branch closed for only part of the window still has positive totals): "
+    "SELECT branch_code, SUM(CASE WHEN business_event_date BETWEEN AFTER_START AND AFTER_END THEN 1 "
+    "ELSE 0 END) as after_txns, SUM(CASE WHEN business_event_date BETWEEN BEFORE_START AND "
+    "BEFORE_END THEN 1 ELSE 0 END) as before_txns FROM sales_order_360 WHERE business_event_date "
+    "BETWEEN BEFORE_START AND AFTER_END GROUP BY branch_code ORDER BY (after_txns - before_txns) "
+    "ASC LIMIT 5. The branch with the largest negative diff is the supply-side closure; report its "
+    "branch_code. This drop = supply-driven cause.\n\n"
+
+    "INCIDENT TOPIC LINKAGE (LINE WORKS internal threads ⋈ LINE OA customer threads): an incident "
+    "carries a TOPIC CODE encoded in LINE WORKS source_path as 'lwt__<TOPIC>__YYYY-MM-DD' "
+    "(e.g. lwt__E3__2025-04-15 → topic E3). To count internal threads: COUNT(DISTINCT source_path) "
+    "WHERE source_kind='doc_chat_line_works' AND source_path LIKE '%lwt__<TOPIC>__%' in the date "
+    "range. When a question asks how many LINE OA customer threads carry the SAME status/topic, "
+    "filter LINE OA by that SAME topic code in chunk_metadata: COUNT(DISTINCT source_path) "
+    "WHERE source_kind='doc_chat_line_oa' AND chunk_metadata::text LIKE '%<TOPIC>%' AND the date "
+    "range (enumerate each day with explicit OR LIKE patterns for exact counts).\n\n"
+
     "NEVER answer 'not found' for something that is in a table — query it. End with all concrete "
     "values.\n\n" + MSCHEMA_GRADING
 )
